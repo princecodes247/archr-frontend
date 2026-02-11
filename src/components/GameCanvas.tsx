@@ -31,12 +31,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     // ── Leva GUI Controls ──
     const controls = useControls({
         'Drift Physics': folder({
-            blendRate: { value: 0.08, min: 0.01, max: 0.5, step: 0.01, label: 'Input Influence' },
-            maxSpeed: { value: 3.0, min: 0.5, max: 10.0, step: 0.1, label: 'Max Speed' },
-            minSpeed: { value: 0.3, min: 0.0, max: 2.0, step: 0.1, label: 'Min Speed' },
+            steeringPower: { value: 0.15, min: 0.01, max: 1.0, step: 0.01, label: 'Steering Power' },
+            maxSpeed: { value: 4.0, min: 0.5, max: 15.0, step: 0.1, label: 'Max Speed' },
+            minSpeed: { value: 0.4, min: 0.0, max: 3.0, step: 0.1, label: 'Min Speed' },
         }),
         'Aiming': folder({
-            timerSeconds: { value: 4.0, min: 1.0, max: 10.0, step: 0.5, label: 'Time Limit (s)' },
+            timerSeconds: { value: 5.0, min: 1.0, max: 15.0, step: 0.5, label: 'Timer (s)' },
             aimZoom: { value: 2.0, min: 1.0, max: 4.0, step: 0.1, label: 'Aim Zoom' },
         }),
         'Result': folder({
@@ -50,8 +50,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
     // Game State Refs (mutable, used in animation loop)
     const reticlePos = useRef<Point>({ x: 0, y: 0 });
-    const momentum = useRef<Point>({ x: 0, y: 0 });    // Smoothed drift velocity
-    const inputVel = useRef<Point>({ x: 0, y: 0 });     // Raw input velocity (from mouse delta)
+    const momentum = useRef<Point>({ x: 0, y: 0 });    // Freedrift velocity
+    const inputBuffer = useRef<Point>({ x: 0, y: 0 }); // Accumulated mouse delta since last frame
     const lastInputPos = useRef<Point | null>(null);
     const wind = useRef<Point>({ x: 0, y: 0 });
     const isAiming = useRef(false);
@@ -130,42 +130,40 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             const targetCenterY = horizonY + 80;
 
             // ── Physics Update ──
-            // Smooth momentum drift: input steers momentum via exponential blend.
-            // Momentum never reaches zero (min speed) and never exceeds max speed.
+            // Additive Impulse Steering: Mouse movement imparts momentum change.
+            // Momentum persists forever (no friction) and is clamped by Speed Bounds.
             if (isMyTurn && isAiming.current) {
                 const m = momentum.current;
-                const iv = inputVel.current;
+                const buf = inputBuffer.current;
 
-                // Blend input velocity into momentum (smooth steering)
-                m.x += (iv.x - m.x) * controls.blendRate;
-                m.y += (iv.y - m.y) * controls.blendRate;
+                // 1. Add accumulated input as thrust (delta based steering)
+                m.x += buf.x * controls.steeringPower;
+                m.y += buf.y * controls.steeringPower;
 
-                // Clamp speed to [MIN_SPEED, MAX_SPEED]
+                // Clear buffer for next frame
+                buf.x = 0;
+                buf.y = 0;
+
+                // 2. Bound speed: Clamp to [MIN_SPEED, MAX_SPEED]
                 const speed = Math.sqrt(m.x * m.x + m.y * m.y);
                 if (speed > controls.maxSpeed) {
                     const scale = controls.maxSpeed / speed;
                     m.x *= scale;
                     m.y *= scale;
                 } else if (speed < controls.minSpeed && speed > 0.001) {
-                    // Boost to minimum speed (keep direction)
                     const scale = controls.minSpeed / speed;
                     m.x *= scale;
                     m.y *= scale;
                 }
 
-                // Apply momentum to position
+                // 3. Apply momentum to position
                 reticlePos.current.x += m.x;
                 reticlePos.current.y += m.y;
-
-                // Decay input velocity toward zero when no new input arrives
-                // This prevents stale input from steering forever
-                iv.x *= 0.95;
-                iv.y *= 0.95;
 
             } else if (!isMyTurn) {
                 reticlePos.current = { x: 0, y: 0 };
                 momentum.current = { x: 0, y: 0 };
-                inputVel.current = { x: 0, y: 0 };
+                inputBuffer.current = { x: 0, y: 0 };
                 lastInputPos.current = null;
             }
 
@@ -343,7 +341,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
-        if (!isMyTurn) return;
+        if (!isMyTurn || postShotZoom.current.active) return;
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -360,7 +358,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         // Snap reticle to finger position
         reticlePos.current = { x: worldX, y: worldY };
         lastInputPos.current = { x: worldX, y: worldY };
-        inputVel.current = { x: 0, y: 0 };
+        inputBuffer.current = { x: 0, y: 0 };
 
         // Start with a gentle random drift (never stands still)
         const angle = Math.random() * Math.PI * 2;
@@ -387,8 +385,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         if (lastInputPos.current) {
             const dx = worldX - lastInputPos.current.x;
             const dy = worldY - lastInputPos.current.y;
-            // Set the raw input velocity — physics loop will blend it smoothly
-            inputVel.current = { x: dx, y: dy };
+            // Accumulate delta for the physics loop
+            inputBuffer.current.x += dx;
+            inputBuffer.current.y += dy;
         }
 
         lastInputPos.current = { x: worldX, y: worldY };
