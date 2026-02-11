@@ -45,6 +45,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         }),
         'Target': folder({
             targetScale: { value: 0.6, min: 0.1, max: 2.0, step: 0.1, label: 'Target Size' },
+        }),
+        'Flight Animation': folder({
+            flightDuration: { value: 550, min: 200, max: 2000, step: 50, label: 'Duration (ms)' },
+            arcHeightFactor: { value: 0.20, min: 0.01, max: 0.5, step: 0.01, label: 'Arc Height %' },
+            windDriftXFactor: { value: 6.0, min: 0.0, max: 20.0, step: 0.5, label: 'Wind Drift X' },
+            windDriftYFactor: { value: 3.0, min: 0.0, max: 10.0, step: 0.5, label: 'Wind Drift Y' },
+            slowMoThreshold: { value: 0.95, min: 0.5, max: 1.0, step: 0.01, label: 'Slow-mo Start' },
+            slowMoSpeed: { value: 0.8, min: 0.1, max: 1.0, step: 0.05, label: 'Slow-mo Speed' },
         })
     });
 
@@ -62,11 +70,33 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const shouldAutoFire = useRef(false);
 
     // Arrow flight animation refs
+    interface TrailPoint { x: number; y: number; angle: number; alpha: number; }
+    interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; r: number; }
     const arrowFlight = useRef<{
         active: boolean;
-        progress: number;
+        elapsed: number;      // ms elapsed
+        duration: number;     // total flight ms
         hitPoint: Point;
-    }>({ active: false, progress: 0, hitPoint: { x: 0, y: 0 } });
+        startX: number; startY: number;
+        endX: number; endY: number;
+        windX: number; windY: number;
+        arcHeight: number;    // gravity arc magnitude
+        trail: TrailPoint[];  // motion trail
+        particles: Particle[];// impact dust
+        flashFrames: number;  // impact flash countdown
+    }>({
+        active: false, elapsed: 0, duration: 550,
+        hitPoint: { x: 0, y: 0 },
+        startX: 0, startY: 0, endX: 0, endY: 0,
+        windX: 0, windY: 0, arcHeight: 180,
+        trail: [], particles: [], flashFrames: 0
+    });
+
+    // DeltaTime tracking
+    const lastFrameTime = useRef(performance.now());
+
+    // Release zoom bump
+    const releaseZoomBump = useRef(0);
 
     // Impact animation (overshoot + bounce + squash when arrow lands)
     const arrowImpact = useRef<{
@@ -106,12 +136,29 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         socket.on('shotResult', (data: { path: Point[], score: number }) => {
             console.log('Shot Result:', data);
-            // Start arrow flight animation
             const hitPt = data.path[0] || { x: 0, y: 0 };
-            arrowFlight.current = { active: true, progress: 0, hitPoint: hitPt };
-            setPinnedArrow(null); // Clear old pinned arrow
+
+            // Compute flight start/end in screen space (will be resolved in render)
+            const f = arrowFlight.current;
+            f.active = true;
+            f.elapsed = 0;
+            f.duration = controls.flightDuration;
+            f.hitPoint = hitPt;
+            f.startX = 0; f.startY = 0; // Computed in render (needs canvas dims)
+            f.endX = 0; f.endY = 0;
+            f.windX = wind.current.x;
+            f.windY = wind.current.y;
+            f.arcHeight = 180;
+            f.trail = [];
+            f.particles = [];
+            f.flashFrames = 0;
+
+            setPinnedArrow(null);
             setLastScore(data.score);
             setScoreFlash(1);
+
+            // Release camera zoom bump
+            releaseZoomBump.current = 1.0;
         });
 
         return () => {
@@ -129,6 +176,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         let animationFrameId: number;
 
         const render = () => {
+            // DeltaTime (ms)
+            const now = performance.now();
+            const deltaTime = Math.min(now - lastFrameTime.current, 50); // Cap at 50ms
+            lastFrameTime.current = now;
             // Resize
             if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
                 canvas.width = window.innerWidth;
@@ -197,6 +248,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 }
             } else if (isMyTurn && isAiming.current) {
                 desiredZoom = controls.aimZoom;
+            }
+
+            // Release zoom bump (brief ~2% zoom on shot release)
+            if (releaseZoomBump.current > 0.01) {
+                desiredZoom += releaseZoomBump.current * 0.03;
+                releaseZoomBump.current *= 0.92;
             }
 
             zoomLevel.current += (desiredZoom - zoomLevel.current) * 0.06;
@@ -282,115 +339,150 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 }
             }
 
-            // 5. Arrow flight animation
+            // 5. Arrow flight animation (projectile physics)
             const flight = arrowFlight.current;
             if (flight.active) {
-                flight.progress += 0.025; // ~40 frames to complete
-                const t = Math.min(flight.progress, 1);
+                // Resolve start/end positions on first frame
+                if (flight.elapsed === 0) {
+                    flight.startX = centerX;
+                    flight.startY = h + 50;
+                    flight.endX = targetCenterX + flight.hitPoint.x;
+                    flight.endY = targetCenterY + flight.hitPoint.y;
 
-                // Start: bottom center of screen (bow position)
-                const startX = centerX;
-                const startY = h + 50; // Just below screen
-                // End: hit point on target
-                const endX = targetCenterX + flight.hitPoint.x;
-                const endY = targetCenterY + flight.hitPoint.y;
-                // Arc peak: midpoint with upward offset
-                const peakY = Math.min(startY, endY) - 200;
+                    const dx = flight.endX - flight.startX;
+                    const dy = flight.endY - flight.startY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    flight.arcHeight = dist * controls.arcHeightFactor;
+                }
 
-                // Quadratic bezier interpolation
-                const midX = (startX + endX) / 2;
-                const ax = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * midX + t * t * endX;
-                const ay = (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * peakY + t * t * endY;
+                // Slow-mo for last portion of flight
+                const tNorm = flight.elapsed / flight.duration;
+                const speedMul = tNorm > controls.slowMoThreshold ? controls.slowMoSpeed : 1.0;
+                flight.elapsed += deltaTime * speedMul;
+                const t = Math.min(flight.elapsed / flight.duration, 1);
 
-                // Calculate angle from trajectory
-                const dt = 0.01;
-                const t2 = Math.min(t + dt, 1);
-                const ax2 = (1 - t2) * (1 - t2) * startX + 2 * (1 - t2) * t2 * midX + t2 * t2 * endX;
-                const ay2 = (1 - t2) * (1 - t2) * startY + 2 * (1 - t2) * t2 * peakY + t2 * t2 * endY;
-                const angle = Math.atan2(ay2 - ay, ax2 - ax);
+                // ── Projectile position ──
+                // Linear interpolation + gravity arc + wind drift
+                const gravityArc = -4 * flight.arcHeight * t * (t - 1);
+                const windDriftX = flight.windX * controls.windDriftXFactor * t * t;
+                const windDriftY = flight.windY * controls.windDriftYFactor * t * t;
 
-                // Draw flying arrow
+                const ax = flight.startX + (flight.endX - flight.startX) * t + windDriftX;
+                const ay = flight.startY + (flight.endY - flight.startY) * t - gravityArc + windDriftY;
+
+                // ── Velocity for rotation ──
+                const dt2 = 0.02;
+                const t2 = Math.min(t + dt2, 1);
+                const gravArc2 = -4 * flight.arcHeight * t2 * (t2 - 1);
+                const wdx2 = flight.windX * controls.windDriftXFactor * t2 * t2;
+                const wdy2 = flight.windY * controls.windDriftYFactor * t2 * t2;
+                const ax2 = flight.startX + (flight.endX - flight.startX) * t2 + wdx2;
+                const ay2 = flight.startY + (flight.endY - flight.startY) * t2 - gravArc2 + wdy2;
+                let angle = Math.atan2(ay2 - ay, ax2 - ax);
+
+                if (t > 0.8) {
+                    const finalAngle = Math.atan2(flight.endY - ay, flight.endX - ax);
+                    const blend = (t - 0.8) / 0.2;
+                    angle = angle * (1 - blend * blend) + finalAngle * blend * blend;
+                }
+
+                // ── Motion trail ──
+                flight.trail.push({ x: ax, y: ay, angle, alpha: 1.0 });
+                if (flight.trail.length > 8) flight.trail.shift();
+                flight.trail.forEach((tp, i) => {
+                    const trailAlpha = (i / flight.trail.length) * 0.25;
+                    ctx.save();
+                    ctx.globalAlpha = trailAlpha;
+                    ctx.translate(tp.x, tp.y);
+                    ctx.rotate(tp.angle);
+                    ctx.strokeStyle = '#444';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(10, 0); ctx.stroke();
+                    ctx.restore();
+                });
+
+                // ── Draw flying arrow ──
                 ctx.save();
                 ctx.translate(ax, ay);
                 ctx.rotate(angle);
-
-                // Shaft
-                ctx.strokeStyle = '#5c4033';
-                ctx.lineWidth = 3;
-                ctx.beginPath(); ctx.moveTo(-25, 0); ctx.lineTo(15, 0); ctx.stroke();
-
-                // Arrowhead
-                ctx.fillStyle = '#888';
-                ctx.beginPath();
-                ctx.moveTo(18, 0); ctx.lineTo(12, -4); ctx.lineTo(12, 4);
-                ctx.fill();
-
-                // Fletching
-                ctx.fillStyle = '#c0392b';
-                ctx.beginPath();
-                ctx.moveTo(-25, 0); ctx.lineTo(-30, -5); ctx.lineTo(-22, 0);
-                ctx.fill();
-                ctx.beginPath();
-                ctx.moveTo(-25, 0); ctx.lineTo(-30, 5); ctx.lineTo(-22, 0);
-                ctx.fill();
-
+                const shaftGrad = ctx.createLinearGradient(0, -1.5, 0, 1.5);
+                shaftGrad.addColorStop(0, '#3a3a3a');
+                shaftGrad.addColorStop(0.5, '#555');
+                shaftGrad.addColorStop(1, '#2a2a2a');
+                ctx.fillStyle = shaftGrad;
+                ctx.fillRect(-28, -1.5, 43, 3);
+                const headGrad = ctx.createLinearGradient(15, -4, 15, 4);
+                headGrad.addColorStop(0, '#aaa');
+                headGrad.addColorStop(0.5, '#ddd');
+                headGrad.addColorStop(1, '#888');
+                ctx.fillStyle = headGrad;
+                ctx.beginPath(); ctx.moveTo(22, 0); ctx.lineTo(14, -4); ctx.lineTo(14, 4); ctx.closePath(); ctx.fill();
+                ctx.fillStyle = '#D03030';
+                ctx.beginPath(); ctx.moveTo(-28, 0); ctx.lineTo(-35, -6); ctx.lineTo(-26, -1); ctx.closePath(); ctx.fill();
+                ctx.beginPath(); ctx.moveTo(-28, 0); ctx.lineTo(-35, 6); ctx.lineTo(-26, 1); ctx.closePath(); ctx.fill();
+                ctx.fillStyle = '#ddd';
+                ctx.beginPath(); ctx.arc(-28, 0, 1.5, 0, Math.PI * 2); ctx.fill();
                 ctx.restore();
 
-                // Flight complete → trigger impact animation + post-shot zoom
                 if (t >= 1) {
                     flight.active = false;
-                    // Start impact animation (overshoot + bounce)
-                    arrowImpact.current = {
-                        active: true,
-                        frame: 0,
-                        totalFrames: 12,
-                        hitPoint: flight.hitPoint
-                    };
-                    // Board shake
-                    boardShake.current = {
-                        x: (Math.random() - 0.5) * 4,
-                        y: (Math.random() - 0.5) * 3,
-                        decay: 1.0
-                    };
-                    postShotZoom.current = {
-                        active: true,
-                        timer: Math.floor(60 * controls.holdTime),
-                        hitPoint: flight.hitPoint
-                    };
+                    flight.trail = [];
+                    const impactX = targetCenterX + shakeX + flight.hitPoint.x;
+                    const impactY = targetCenterY + shakeY + flight.hitPoint.y;
+                    for (let p_idx = 0; p_idx < 10; p_idx++) {
+                        const pa = Math.random() * Math.PI * 2;
+                        const pv = 1 + Math.random() * 3;
+                        flight.particles.push({
+                            x: impactX, y: impactY,
+                            vx: Math.cos(pa) * pv,
+                            vy: Math.sin(pa) * pv - 1,
+                            life: 0, maxLife: 15 + Math.random() * 10,
+                            r: 1 + Math.random() * 2
+                        });
+                    }
+                    flight.flashFrames = 4;
+                    arrowImpact.current = { active: true, frame: 0, totalFrames: 12, hitPoint: flight.hitPoint };
+                    boardShake.current = { x: (Math.random() - 0.5) * 4, y: (Math.random() - 0.5) * 3, decay: 1.0 };
+                    postShotZoom.current = { active: true, timer: Math.floor(60 * controls.holdTime), hitPoint: flight.hitPoint };
                 }
+            }
+
+            // 5b. Impact particles & flash
+            if (flight.particles.length > 0) {
+                flight.particles = flight.particles.filter(p => {
+                    p.life++; p.x += p.vx; p.y += p.vy; p.vy += 0.15;
+                    const alpha = 1 - p.life / p.maxLife;
+                    if (alpha <= 0) return false;
+                    ctx.save(); ctx.globalAlpha = alpha * 0.6; ctx.fillStyle = '#c8b89a';
+                    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+                    return true;
+                });
+            }
+            if (flight.flashFrames > 0) {
+                const fx = targetCenterX + shakeX + flight.hitPoint.x;
+                const fy = targetCenterY + shakeY + flight.hitPoint.y;
+                ctx.save(); ctx.globalAlpha = flight.flashFrames / 4 * 0.4; ctx.fillStyle = '#fff';
+                ctx.beginPath(); ctx.arc(fx, fy, 12, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+                flight.flashFrames--;
             }
 
             // 6. Reticle + Aim Timer
             if (isMyTurn && isAiming.current) {
-                // Tick down the aim timer
-                const framesPerSecond = 60;
-                const totalFrames = controls.timerSeconds * framesPerSecond;
+                const totalFrames = controls.timerSeconds * 60;
                 aimTimer.current = Math.max(0, aimTimer.current - (1 / totalFrames));
-
-                // Auto-fire when timer expires
                 if (aimTimer.current <= 0 && !shouldAutoFire.current) {
                     shouldAutoFire.current = true;
                 }
-
                 const rx = targetCenterX + reticlePos.current.x;
                 const ry = targetCenterY + reticlePos.current.y;
                 drawReticle(ctx, rx, ry, aimTimer.current);
             }
 
             ctx.restore(); // Undo zoom
-
-            // ── HUD (drawn OUTSIDE zoom, always screen-space) ──
             drawHUD(ctx, w, h, wind.current, roomState, socket?.id, lastScore, scoreFlash);
-
-            // Fade score flash
-            if (scoreFlash > 0) {
-                setScoreFlash(prev => Math.max(0, prev - 0.015));
-            }
-
-            // Handle auto-fire (from timer expiry)
+            if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.015));
             if (shouldAutoFire.current) {
-                shouldAutoFire.current = false;
-                isAiming.current = false;
+                shouldAutoFire.current = false; isAiming.current = false;
                 socket?.emit('shoot', { aimPosition: reticlePos.current });
             }
 
