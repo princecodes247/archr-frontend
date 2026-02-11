@@ -123,6 +123,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastScore, setLastScore] = useState<number | null>(null);
     const [scoreFlash, setScoreFlash] = useState(0);
+    const pendingScore = useRef<number | null>(null);
 
     useEffect(() => {
         if (!socket) return;
@@ -154,8 +155,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             f.flashFrames = 0;
 
             setPinnedArrow(null);
-            setLastScore(data.score);
-            setScoreFlash(1);
+            pendingScore.current = data.score; // Defer until arrow lands
 
             // Release camera zoom bump
             releaseZoomBump.current = 1.0;
@@ -444,6 +444,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                     arrowImpact.current = { active: true, frame: 0, totalFrames: 12, hitPoint: flight.hitPoint };
                     boardShake.current = { x: (Math.random() - 0.5) * 4, y: (Math.random() - 0.5) * 3, decay: 1.0 };
                     postShotZoom.current = { active: true, timer: Math.floor(60 * controls.holdTime), hitPoint: flight.hitPoint };
+                    // Now show the score
+                    if (pendingScore.current !== null) {
+                        setLastScore(pendingScore.current);
+                        setScoreFlash(1);
+                        pendingScore.current = null;
+                    }
                 }
             }
 
@@ -480,7 +486,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
             ctx.restore(); // Undo zoom
             drawHUD(ctx, w, h, wind.current, roomState, socket?.id, lastScore, scoreFlash);
-            if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.015));
+            if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.005));
             if (shouldAutoFire.current) {
                 shouldAutoFire.current = false; isAiming.current = false;
                 socket?.emit('shoot', { aimPosition: reticlePos.current });
@@ -1261,15 +1267,45 @@ const drawHUD = (
     // ── Score Flash (center of screen) ──
     if (lastScore !== null && scoreFlash > 0) {
         ctx.save();
-        ctx.globalAlpha = scoreFlash;
+        ctx.globalAlpha = Math.min(scoreFlash * 1.5, 1); // Brighter for longer
         ctx.textAlign = 'center';
-        ctx.fillStyle = lastScore >= 8 ? '#fbbf24' : lastScore >= 5 ? '#34d399' : lastScore > 0 ? '#94a3b8' : '#ef4444';
-        ctx.font = `bold ${48 + (1 - scoreFlash) * 20}px Arial`;
-        ctx.fillText(lastScore > 0 ? `+${lastScore}` : 'MISS', w / 2, h / 2);
+        ctx.textBaseline = 'middle';
+
+        const fontSize = 72 + (1 - scoreFlash) * 30;
+        const scoreText = lastScore > 0 ? `+${lastScore}` : 'MISS';
+        const color = lastScore >= 8 ? '#fbbf24' : lastScore >= 5 ? '#34d399' : lastScore > 0 ? '#94a3b8' : '#ef4444';
+        const yPos = h * 0.42;
+
+        // Drop shadow
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 12;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 3;
+
+        // Text stroke (outline) for contrast
+        ctx.font = `bold ${fontSize}px Arial`;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 5;
+        ctx.strokeText(scoreText, w / 2, yPos);
+
+        // Fill
+        ctx.fillStyle = color;
+        ctx.fillText(scoreText, w / 2, yPos);
+
+        // Reset shadow for subtitle
+        ctx.shadowColor = 'transparent';
+
         if (lastScore === 10) {
-            ctx.font = 'bold 20px Arial';
+            ctx.font = 'bold 28px Arial';
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.lineWidth = 3;
+            ctx.strokeText('BULLSEYE!', w / 2, yPos + 50);
             ctx.fillStyle = '#fbbf24';
-            ctx.fillText('BULLSEYE!', w / 2, h / 2 + 40);
+            ctx.fillText('BULLSEYE!', w / 2, yPos + 50);
+        } else if (lastScore === 0) {
+            ctx.font = 'bold 22px Arial';
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.fillText('Better luck next time', w / 2, yPos + 45);
         }
         ctx.restore();
     }
