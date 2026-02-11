@@ -68,6 +68,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         hitPoint: Point;
     }>({ active: false, progress: 0, hitPoint: { x: 0, y: 0 } });
 
+    // Impact animation (overshoot + bounce + squash when arrow lands)
+    const arrowImpact = useRef<{
+        active: boolean;
+        frame: number;       // Current frame of impact anim
+        totalFrames: number; // Duration (~12 frames = 0.2s)
+        hitPoint: Point;
+    }>({ active: false, frame: 0, totalFrames: 12, hitPoint: { x: 0, y: 0 } });
+
+    // Board shake on impact
+    const boardShake = useRef<{ x: number; y: number; decay: number }>({
+        x: 0, y: 0, decay: 0
+    });
+
     // Post-shot zoom state
     const postShotZoom = useRef<{
         active: boolean;
@@ -224,12 +237,46 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             // Trees
             drawTrees(ctx, w, horizonY);
 
-            // 3. Target
-            drawTarget(ctx, targetCenterX, targetCenterY, controls.targetScale);
+            // 3. Target (with board shake offset)
+            const shake = boardShake.current;
+            let shakeX = 0, shakeY = 0;
+            if (shake.decay > 0) {
+                shakeX = shake.x * shake.decay * Math.sin(shake.decay * 40);
+                shakeY = shake.y * shake.decay * Math.cos(shake.decay * 35);
+                shake.decay *= 0.88; // Exponential decay
+                if (shake.decay < 0.01) shake.decay = 0;
+            }
+            drawTarget(ctx, targetCenterX + shakeX, targetCenterY + shakeY, controls.targetScale);
 
             // 4. Pinned arrow (after flight completes)
             if (pinnedArrow) {
-                drawPinnedArrow(ctx, targetCenterX + pinnedArrow.x, targetCenterY + pinnedArrow.y);
+                drawPinnedArrow(ctx, targetCenterX + shakeX + pinnedArrow.x, targetCenterY + shakeY + pinnedArrow.y, 1.0);
+            }
+
+            // 4b. Impact animation (arrow landing with overshoot/bounce)
+            const impact = arrowImpact.current;
+            if (impact.active) {
+                impact.frame++;
+                const t = impact.frame / impact.totalFrames; // 0 → 1
+
+                // Overshoot + damped bounce: starts at 1.15 (overshoot), settles to 1.0
+                const bounce = 1.0 + 0.15 * Math.cos(t * Math.PI * 2.5) * (1 - t);
+                // Squash: compress Y at impact, then relax
+                const squash = 1.0 - 0.12 * Math.cos(t * Math.PI * 3) * (1 - t);
+
+                ctx.save();
+                const ax = targetCenterX + shakeX + impact.hitPoint.x;
+                const ay = targetCenterY + shakeY + impact.hitPoint.y;
+                ctx.translate(ax, ay);
+                ctx.scale(bounce, squash);
+                ctx.translate(-ax, -ay);
+                drawPinnedArrow(ctx, ax, ay, t);
+                ctx.restore();
+
+                if (impact.frame >= impact.totalFrames) {
+                    impact.active = false;
+                    setPinnedArrow(impact.hitPoint);
+                }
             }
 
             // 5. Arrow flight animation
@@ -286,10 +333,22 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
                 ctx.restore();
 
-                // Flight complete → pin the arrow and trigger post-shot zoom
+                // Flight complete → trigger impact animation + post-shot zoom
                 if (t >= 1) {
                     flight.active = false;
-                    setPinnedArrow(flight.hitPoint);
+                    // Start impact animation (overshoot + bounce)
+                    arrowImpact.current = {
+                        active: true,
+                        frame: 0,
+                        totalFrames: 12,
+                        hitPoint: flight.hitPoint
+                    };
+                    // Board shake
+                    boardShake.current = {
+                        x: (Math.random() - 0.5) * 4,
+                        y: (Math.random() - 0.5) * 3,
+                        decay: 1.0
+                    };
                     postShotZoom.current = {
                         active: true,
                         timer: Math.floor(60 * controls.holdTime),
@@ -572,31 +631,243 @@ const drawTarget = (ctx: CanvasRenderingContext2D, x: number, y: number, scale: 
     ctx.restore();
 };
 
-const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
+const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, animProgress: number = 1.0) => {
     ctx.save();
     ctx.translate(x, y);
 
-    // Impact hole
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+    // Deterministic tilt from hit position (5°–7° unique angle per arrow)
+    const seed = Math.abs(x * 73.13 + y * 91.17) % 360;
+    const tiltAngle = ((seed / 360) * 0.24 - 0.12); // ±7° — subtle, fired not placed
+    ctx.rotate(tiltAngle);
 
-    // Shaft protruding outward (foreshortened — viewed from front)
-    ctx.fillStyle = '#5c4033';
-    ctx.fillRect(-1.5, -3, 3, -18); // Short shaft sticking "out" (drawn upward for perspective)
+    // ── Proportions (refined: thinner shaft, smaller vanes) ──
+    const shaftLen = 28;
+    const shaftR1 = 1.3;   // Slim shaft (matches ferrule inner radius)
+    const shaftR2 = 1.3;   // Same width — straight cylinder, no taper
 
-    // Fletching (two fins at the end of the shaft)
-    const fY = -21;
-    ctx.fillStyle = '#c0392b';
+    // ── 1. Shadow ellipse under shaft (depth contact) ──
+    ctx.save();
+    ctx.globalAlpha = 0.2 * animProgress;
+    ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.moveTo(0, fY); ctx.lineTo(-6, fY - 8); ctx.lineTo(0, fY - 4);
+    ctx.ellipse(3, 2, shaftLen * 0.6, 3.5, tiltAngle + 0.3, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+
+    // // ── 2. Board indentation circle (1-2px pressed-in ring) ──
+    // ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    // ctx.lineWidth = 1.5;
+    // ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.stroke();
+
+    // // Inner dark hole
+    // ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    // ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, Math.PI * 2); ctx.fill();
+
+    // Pushed-out rim (lighter)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.stroke();
+
+    // ── 3. Broadhead tip (viewed from behind — ferrule + 3 blades) ──
+    // Ferrule (cylindrical base that connects to shaft)
+    const ferruleR = 2.2;
+    const ferruleGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, ferruleR + 1);
+    ferruleGrad.addColorStop(0, '#bbb');
+    ferruleGrad.addColorStop(0.4, '#999');
+    ferruleGrad.addColorStop(0.8, '#777');
+    ferruleGrad.addColorStop(1, '#555');
+    ctx.fillStyle = ferruleGrad;
+    ctx.beginPath(); ctx.arc(0, 0, ferruleR, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 0.6;
+    ctx.stroke();
+
+    // 3 Blade edges radiating from ferrule (120° apart)
+    const bladeLen = 6;
+    const bladeW = 1.8;
+    for (let b = 0; b < 3; b++) {
+        const bAngle = (b * 120 - 60) * (Math.PI / 180);
+        const bTipX = Math.cos(bAngle) * bladeLen;
+        const bTipY = Math.sin(bAngle) * bladeLen;
+        const bPerpX = -Math.sin(bAngle) * bladeW * 0.5;
+        const bPerpY = Math.cos(bAngle) * bladeW * 0.5;
+
+        // Blade shape (tapered razor edge)
+        const bladeGrad = ctx.createLinearGradient(0, 0, bTipX, bTipY);
+        bladeGrad.addColorStop(0, '#aaa');
+        bladeGrad.addColorStop(0.3, '#d0d0d0');
+        bladeGrad.addColorStop(0.6, '#e8e8e8'); // Razor edge glint
+        bladeGrad.addColorStop(1, '#888');
+        ctx.fillStyle = bladeGrad;
+        ctx.beginPath();
+        ctx.moveTo(bPerpX * 0.6, bPerpY * 0.6);
+        ctx.lineTo(bTipX, bTipY);
+        ctx.lineTo(-bPerpX * 0.6, -bPerpY * 0.6);
+        ctx.closePath();
+        ctx.fill();
+        // Blade edge highlight
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.lineWidth = 0.4;
+        ctx.beginPath();
+        ctx.moveTo(bPerpX * 0.3, bPerpY * 0.3);
+        ctx.lineTo(bTipX * 0.9, bTipY * 0.9);
+        ctx.stroke();
+    }
+
+    // Center specular highlight on ferrule
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.arc(-0.3, -0.5, 0.8, 0, Math.PI * 2); ctx.fill();
+
+    // ── 4. Shaft (slim carbon tube, black at bottom → dark gray at top) ──
+    const shaftGradV = ctx.createLinearGradient(0, 0, 0, -shaftLen);
+    shaftGradV.addColorStop(0, '#111');       // Black at ferrule end
+    shaftGradV.addColorStop(0.15, '#222');     // Near-black
+    shaftGradV.addColorStop(0.4, '#3a3a3a');   // Dark gray
+    shaftGradV.addColorStop(0.7, '#4a4a4a');   // Mid gray
+    shaftGradV.addColorStop(1, '#444');         // Slightly lighter at back
+    // Horizontal highlight (cylindrical sheen)
+    const shaftGradH = ctx.createLinearGradient(-shaftR1 - 0.5, 0, shaftR1 + 0.5, 0);
+    shaftGradH.addColorStop(0, 'rgba(0,0,0,0.4)');
+    shaftGradH.addColorStop(0.35, 'rgba(255,255,255,0.05)');
+    shaftGradH.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+    shaftGradH.addColorStop(0.65, 'rgba(255,255,255,0.03)');
+    shaftGradH.addColorStop(1, 'rgba(0,0,0,0.3)');
+
+    // Draw shaft body (starts flush with ferrule)
+    ctx.fillStyle = shaftGradV;
     ctx.beginPath();
-    ctx.moveTo(0, fY); ctx.lineTo(6, fY - 8); ctx.lineTo(0, fY - 4);
+    ctx.moveTo(-shaftR1, 0);       // Starts at ferrule center
+    ctx.lineTo(-shaftR2, -shaftLen);
+    ctx.lineTo(shaftR2, -shaftLen);
+    ctx.lineTo(shaftR1, 0);
+    ctx.closePath();
+    ctx.fill();
+    // Overlay horizontal highlight
+    ctx.fillStyle = shaftGradH;
     ctx.fill();
 
-    // Nock (small circle at end)
-    ctx.fillStyle = '#888';
-    ctx.beginPath(); ctx.arc(0, fY - 4, 1.5, 0, Math.PI * 2); ctx.fill();
+    // Subtle texture lines (carbon weave)
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 0.4;
+    for (let i = 0; i < shaftLen; i += 4) {
+        const frac = i / shaftLen;
+        const w = shaftR1 + (shaftR2 - shaftR1) * frac;
+        const yy = -1 - i;
+        ctx.beginPath(); ctx.moveTo(-w, yy); ctx.lineTo(w, yy - 1.5); ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── 5. Pin wrap / binding (where vanes attach to shaft) ──
+    const wrapY = -shaftLen + 1;
+    const wrapGrad = ctx.createLinearGradient(-shaftR2, 0, shaftR2, 0);
+    wrapGrad.addColorStop(0, '#146614');
+    wrapGrad.addColorStop(0.3, '#22aa22');
+    wrapGrad.addColorStop(0.5, '#33cc33');
+    wrapGrad.addColorStop(0.7, '#22aa22');
+    wrapGrad.addColorStop(1, '#146614');
+    ctx.fillStyle = wrapGrad;
+    ctx.fillRect(-shaftR2 - 0.3, wrapY, (shaftR2 + 0.3) * 2, 3);
+    // Wrap thread lines
+    ctx.strokeStyle = 'rgba(0,80,0,0.3)';
+    ctx.lineWidth = 0.4;
+    for (let wy = wrapY; wy < wrapY + 3; wy += 1) {
+        ctx.beginPath(); ctx.moveTo(-shaftR2, wy); ctx.lineTo(shaftR2, wy); ctx.stroke();
+    }
+
+    // ── 6. Fletching — two triangular vanes in V-shape ──
+    // Vanes attach at wrap and splay AWAY from target (negative Y = up on screen)
+    const vaneBaseY = -shaftLen;     // Wrap/attach point
+    const fLen = 18;                  // How far vanes extend
+    const fSpread = 14;              // Lateral splay
+
+    for (const d of [-1, 1]) {
+        ctx.save();
+
+        // Attachment point at wrap (on shaft)
+        const attachX = d * 1;
+        const attachY = vaneBaseY + 2;          // Just below wrap, on shaft
+        // Wing tip: outward and AWAY from target (more negative Y)
+        const tipX = d * fSpread;
+        const tipY = vaneBaseY - fLen;            // Away from target
+        // Inner point back near shaft
+        const innerX = 0;
+        const innerY = vaneBaseY - fLen * 0.7;
+
+        // Main vane face
+        const vGrad = ctx.createLinearGradient(attachX, attachY, tipX, tipY);
+        vGrad.addColorStop(0, '#E83030');
+        vGrad.addColorStop(0.4, '#F04545');
+        vGrad.addColorStop(0.7, '#DD2020');
+        vGrad.addColorStop(1, '#AA1515');
+        ctx.fillStyle = vGrad;
+
+        ctx.beginPath();
+        ctx.moveTo(attachX, attachY);
+        ctx.quadraticCurveTo(
+            d * fSpread * 0.5, vaneBaseY - fLen * 0.4,
+            tipX, tipY
+        );
+        ctx.lineTo(innerX, innerY);
+        ctx.closePath();
+        ctx.fill();
+
+        // Inner face (darker — depth)
+        ctx.fillStyle = 'rgba(120, 15, 15, 0.4)';
+        ctx.beginPath();
+        ctx.moveTo(attachX, attachY);
+        ctx.lineTo(innerX, innerY);
+        ctx.lineTo(innerX + d * 2, innerY + 3);
+        ctx.closePath();
+        ctx.fill();
+
+        // Outline
+        ctx.strokeStyle = 'rgba(80, 0, 0, 0.35)';
+        ctx.lineWidth = 0.6;
+        ctx.beginPath();
+        ctx.moveTo(attachX, attachY);
+        ctx.quadraticCurveTo(
+            d * fSpread * 0.5, vaneBaseY - fLen * 0.4,
+            tipX, tipY
+        );
+        ctx.lineTo(innerX, innerY);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Highlight streak
+        ctx.strokeStyle = 'rgba(255, 180, 180, 0.2)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(d * 1.5, attachY - 2);
+        ctx.quadraticCurveTo(
+            d * fSpread * 0.35, vaneBaseY - fLen * 0.3,
+            tipX * 0.7, tipY
+        );
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    // ── 7. Nock (above fletching tips) ──
+    const nockY = vaneBaseY - fLen * 0.7 - 2;
+    const nockGrad = ctx.createRadialGradient(0, nockY, 0, 0, nockY, 3);
+    nockGrad.addColorStop(0, '#f0f0f0');
+    nockGrad.addColorStop(0.5, '#ddd');
+    nockGrad.addColorStop(1, '#aaa');
+    ctx.fillStyle = nockGrad;
+    ctx.beginPath(); ctx.arc(0, nockY, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    // String groove
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-1.8, nockY + 0.5);
+    ctx.lineTo(0, nockY - 1.5);
+    ctx.lineTo(1.8, nockY + 0.5);
+    ctx.stroke();
 
     ctx.restore();
 };
