@@ -4,13 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
+    "leva": "^0.10.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "socket.io-client": "^4.8.3"

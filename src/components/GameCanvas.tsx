@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
+import { useControls, folder } from 'leva';
 import { Socket } from 'socket.io-client';
 
 interface GameCanvasProps {
@@ -27,6 +28,26 @@ interface RoomState {
 const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
+    // ── Leva GUI Controls ──
+    const controls = useControls({
+        'Drift Physics': folder({
+            blendRate: { value: 0.08, min: 0.01, max: 0.5, step: 0.01, label: 'Input Influence' },
+            maxSpeed: { value: 3.0, min: 0.5, max: 10.0, step: 0.1, label: 'Max Speed' },
+            minSpeed: { value: 0.3, min: 0.0, max: 2.0, step: 0.1, label: 'Min Speed' },
+        }),
+        'Aiming': folder({
+            timerSeconds: { value: 4.0, min: 1.0, max: 10.0, step: 0.5, label: 'Time Limit (s)' },
+            aimZoom: { value: 2.0, min: 1.0, max: 4.0, step: 0.1, label: 'Aim Zoom' },
+        }),
+        'Result': folder({
+            resultZoom: { value: 3.0, min: 1.0, max: 6.0, step: 0.1, label: 'Result Zoom' },
+            holdTime: { value: 2.0, min: 0.5, max: 5.0, step: 0.1, label: 'Hold Duration (s)' },
+        }),
+        'Target': folder({
+            targetScale: { value: 0.6, min: 0.1, max: 2.0, step: 0.1, label: 'Target Size' },
+        })
+    });
+
     // Game State Refs (mutable, used in animation loop)
     const reticlePos = useRef<Point>({ x: 0, y: 0 });
     const momentum = useRef<Point>({ x: 0, y: 0 });    // Smoothed drift velocity
@@ -36,13 +57,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const isAiming = useRef(false);
     const zoomLevel = useRef(1);
 
-    // Drift tuning constants
-    const BLEND_RATE = 0.08;      // How fast input steers momentum (0=ignore input, 1=instant snap)
-    const MAX_SPEED = 3.0;        // Max drift speed (px/frame)
-    const MIN_SPEED = 0.3;        // Minimum drift speed — never stands still
-
     // Aim timer: 1.0 (full) → 0.0 (auto-fire)
-    const AIM_DURATION_FRAMES = 12 * 60; // ~4 seconds at 60fps
     const aimTimer = useRef(1.0);
     const shouldAutoFire = useRef(false);
 
@@ -122,18 +137,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 const iv = inputVel.current;
 
                 // Blend input velocity into momentum (smooth steering)
-                m.x += (iv.x - m.x) * BLEND_RATE;
-                m.y += (iv.y - m.y) * BLEND_RATE;
+                m.x += (iv.x - m.x) * controls.blendRate;
+                m.y += (iv.y - m.y) * controls.blendRate;
 
                 // Clamp speed to [MIN_SPEED, MAX_SPEED]
                 const speed = Math.sqrt(m.x * m.x + m.y * m.y);
-                if (speed > MAX_SPEED) {
-                    const scale = MAX_SPEED / speed;
+                if (speed > controls.maxSpeed) {
+                    const scale = controls.maxSpeed / speed;
                     m.x *= scale;
                     m.y *= scale;
-                } else if (speed < MIN_SPEED && speed > 0.001) {
+                } else if (speed < controls.minSpeed && speed > 0.001) {
                     // Boost to minimum speed (keep direction)
-                    const scale = MIN_SPEED / speed;
+                    const scale = controls.minSpeed / speed;
                     m.x *= scale;
                     m.y *= scale;
                 }
@@ -162,7 +177,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             let zoomFocusY = targetCenterY;
 
             if (psz.active) {
-                desiredZoom = 3.0;
+                desiredZoom = controls.resultZoom;
                 zoomFocusX = targetCenterX + psz.hitPoint.x;
                 zoomFocusY = targetCenterY + psz.hitPoint.y;
                 psz.timer--;
@@ -170,7 +185,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                     psz.active = false;
                 }
             } else if (isMyTurn && isAiming.current) {
-                desiredZoom = 2.0;
+                desiredZoom = controls.aimZoom;
             }
 
             zoomLevel.current += (desiredZoom - zoomLevel.current) * 0.06;
@@ -212,7 +227,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             drawTrees(ctx, w, horizonY);
 
             // 3. Target
-            drawTarget(ctx, targetCenterX, targetCenterY, 0.6);
+            drawTarget(ctx, targetCenterX, targetCenterY, controls.targetScale);
 
             // 4. Pinned arrow (after flight completes)
             if (pinnedArrow) {
@@ -279,7 +294,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                     setPinnedArrow(flight.hitPoint);
                     postShotZoom.current = {
                         active: true,
-                        timer: 120, // ~2 seconds at 60fps
+                        timer: Math.floor(60 * controls.holdTime),
                         hitPoint: flight.hitPoint
                     };
                 }
@@ -288,7 +303,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             // 6. Reticle + Aim Timer
             if (isMyTurn && isAiming.current) {
                 // Tick down the aim timer
-                aimTimer.current = Math.max(0, aimTimer.current - (1 / AIM_DURATION_FRAMES));
+                const framesPerSecond = 60;
+                const totalFrames = controls.timerSeconds * framesPerSecond;
+                aimTimer.current = Math.max(0, aimTimer.current - (1 / totalFrames));
 
                 // Auto-fire when timer expires
                 if (aimTimer.current <= 0 && !shouldAutoFire.current) {
@@ -347,7 +364,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         // Start with a gentle random drift (never stands still)
         const angle = Math.random() * Math.PI * 2;
-        momentum.current = { x: Math.cos(angle) * MIN_SPEED, y: Math.sin(angle) * MIN_SPEED };
+        momentum.current = {
+            x: Math.cos(angle) * controls.minSpeed, // Updated from controls.drift.minSpeed
+            y: Math.sin(angle) * controls.minSpeed // Updated from controls.drift.minSpeed
+        };
 
         setPinnedArrow(null);
         setLastScore(null);
