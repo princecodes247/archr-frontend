@@ -29,14 +29,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
     // Game State Refs (mutable, used in animation loop)
     const reticlePos = useRef<Point>({ x: 0, y: 0 });
-    const controlPos = useRef<Point>({ x: 0, y: 0 });
+    const momentum = useRef<Point>({ x: 0, y: 0 });    // Smoothed drift velocity
+    const inputVel = useRef<Point>({ x: 0, y: 0 });     // Raw input velocity (from mouse delta)
+    const lastInputPos = useRef<Point | null>(null);
     const wind = useRef<Point>({ x: 0, y: 0 });
     const isAiming = useRef(false);
     const zoomLevel = useRef(1);
-    const swayPhase = useRef({ px1: Math.random() * 100, px2: Math.random() * 100, py1: Math.random() * 100, py2: Math.random() * 100 });
+
+    // Drift tuning constants
+    const BLEND_RATE = 0.08;      // How fast input steers momentum (0=ignore input, 1=instant snap)
+    const MAX_SPEED = 3.0;        // Max drift speed (px/frame)
+    const MIN_SPEED = 0.3;        // Minimum drift speed — never stands still
 
     // Aim timer: 1.0 (full) → 0.0 (auto-fire)
-    const AIM_DURATION_FRAMES = 4 * 60; // ~4 seconds at 60fps
+    const AIM_DURATION_FRAMES = 12 * 60; // ~4 seconds at 60fps
     const aimTimer = useRef(1.0);
     const shouldAutoFire = useRef(false);
 
@@ -68,13 +74,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 wind.current = room.wind;
             }
             setRoomState(room);
-            // Randomize sway phases each turn
-            swayPhase.current = {
-                px1: Math.random() * 100,
-                px2: Math.random() * 100,
-                py1: Math.random() * 100,
-                py2: Math.random() * 100,
-            };
         });
 
         socket.on('shotResult', (data: { path: Point[], score: number }) => {
@@ -116,48 +115,43 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             const targetCenterY = horizonY + 80;
 
             // ── Physics Update ──
-            // Four layers: Wind Drift → Hand Sway → Player Input → Input Offset Sway
+            // Smooth momentum drift: input steers momentum via exponential blend.
+            // Momentum never reaches zero (min speed) and never exceeds max speed.
             if (isMyTurn && isAiming.current) {
-                const time = Date.now() / 1000;
-                const sp = swayPhase.current;
+                const m = momentum.current;
+                const iv = inputVel.current;
 
-                // Layer 1: Player Input — reticle follows finger with inertia
-                const stiffness = 0.12;
-                reticlePos.current.x += (controlPos.current.x - reticlePos.current.x) * stiffness;
-                reticlePos.current.y += (controlPos.current.y - reticlePos.current.y) * stiffness;
+                // Blend input velocity into momentum (smooth steering)
+                m.x += (iv.x - m.x) * BLEND_RATE;
+                m.y += (iv.y - m.y) * BLEND_RATE;
 
-                // Layer 2: Wind Drift — gentle, constant push (predictable → learnable)
-                const windForce = 0.3;
-                reticlePos.current.x += wind.current.x * windForce;
-                reticlePos.current.y += wind.current.y * windForce;
+                // Clamp speed to [MIN_SPEED, MAX_SPEED]
+                const speed = Math.sqrt(m.x * m.x + m.y * m.y);
+                if (speed > MAX_SPEED) {
+                    const scale = MAX_SPEED / speed;
+                    m.x *= scale;
+                    m.y *= scale;
+                } else if (speed < MIN_SPEED && speed > 0.001) {
+                    // Boost to minimum speed (keep direction)
+                    const scale = MIN_SPEED / speed;
+                    m.x *= scale;
+                    m.y *= scale;
+                }
 
-                // Layer 3: Hand Sway — breathing + micro tremor (creates tension)
-                // Slow breathing cycle (~1 Hz, low amplitude)
-                const breathX = Math.sin(time * 0.9 + sp.px1) * 0.6;
-                const breathY = Math.cos(time * 0.7 + sp.py1) * 0.8;
-                // Faster hand tremor (~3-5 Hz, very small)
-                const tremorX = Math.sin(time * 3.2 + sp.px2) * 0.25 + Math.cos(time * 5.7 + sp.px1) * 0.1;
-                const tremorY = Math.cos(time * 3.8 + sp.py2) * 0.2 + Math.sin(time * 5.1 + sp.py1) * 0.1;
+                // Apply momentum to position
+                reticlePos.current.x += m.x;
+                reticlePos.current.y += m.y;
 
-                reticlePos.current.x += breathX + tremorX;
-                reticlePos.current.y += breathY + tremorY;
-
-                // Layer 4: Input Offset Sway — the further from center, the more unstable
-                // This rewards patience: staying near center is easier to hold.
-                const offsetDist = Math.sqrt(
-                    reticlePos.current.x * reticlePos.current.x +
-                    reticlePos.current.y * reticlePos.current.y
-                );
-                const instability = Math.min(offsetDist / 80, 1.0); // 0 at center, 1 at 80px+
-                const offsetSwayX = Math.sin(time * 2.1 + sp.py2) * instability * 0.8;
-                const offsetSwayY = Math.cos(time * 1.7 + sp.px2) * instability * 0.6;
-
-                reticlePos.current.x += offsetSwayX;
-                reticlePos.current.y += offsetSwayY;
+                // Decay input velocity toward zero when no new input arrives
+                // This prevents stale input from steering forever
+                iv.x *= 0.95;
+                iv.y *= 0.95;
 
             } else if (!isMyTurn) {
                 reticlePos.current = { x: 0, y: 0 };
-                controlPos.current = { x: 0, y: 0 };
+                momentum.current = { x: 0, y: 0 };
+                inputVel.current = { x: 0, y: 0 };
+                lastInputPos.current = null;
             }
 
             // ── Zoom Interpolation ──
@@ -331,11 +325,30 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     }, [isMyTurn, pinnedArrow, roomState, lastScore, scoreFlash]);
 
     // ── Input Handlers ──
-    const handleStart = () => {
+    const handleStart = (x: number, y: number) => {
         if (!isMyTurn) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const cx = canvas.width / 2;
+        const cy = canvas.height * 0.55 + 80;
+        const zoom = zoomLevel.current;
+        const worldX = (x - cx) / zoom;
+        const worldY = (y - cy) / zoom;
+
         isAiming.current = true;
-        aimTimer.current = 1.0; // Reset timer
+        aimTimer.current = 1.0;
         shouldAutoFire.current = false;
+
+        // Snap reticle to finger position
+        reticlePos.current = { x: worldX, y: worldY };
+        lastInputPos.current = { x: worldX, y: worldY };
+        inputVel.current = { x: 0, y: 0 };
+
+        // Start with a gentle random drift (never stands still)
+        const angle = Math.random() * Math.PI * 2;
+        momentum.current = { x: Math.cos(angle) * MIN_SPEED, y: Math.sin(angle) * MIN_SPEED };
+
         setPinnedArrow(null);
         setLastScore(null);
     };
@@ -347,10 +360,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         const cx = canvas.width / 2;
         const cy = canvas.height * 0.55 + 80;
-
-        // Scale the control by inverse zoom so finger maps correctly
         const zoom = zoomLevel.current;
-        controlPos.current = { x: (x - cx) / zoom, y: (y - cy) / zoom };
+        const worldX = (x - cx) / zoom;
+        const worldY = (y - cy) / zoom;
+
+        if (lastInputPos.current) {
+            const dx = worldX - lastInputPos.current.x;
+            const dy = worldY - lastInputPos.current.y;
+            // Set the raw input velocity — physics loop will blend it smoothly
+            inputVel.current = { x: dx, y: dy };
+        }
+
+        lastInputPos.current = { x: worldX, y: worldY };
     };
 
     const handleEnd = () => {
@@ -364,13 +385,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         <canvas
             ref={canvasRef}
             className={`block w-full h-full touch-none ${isMyTurn ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
-            onMouseDown={handleStart}
+            onMouseDown={(e) => handleStart(e.clientX, e.clientY)}
             onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
             onMouseUp={handleEnd}
             onMouseLeave={() => { if (isAiming.current) handleEnd(); }}
             onTouchStart={(e) => {
-                handleStart();
-                handleMove(e.touches[0].clientX, e.touches[0].clientY);
+                handleStart(e.touches[0].clientX, e.touches[0].clientY);
             }}
             onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
             onTouchEnd={handleEnd}
