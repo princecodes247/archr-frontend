@@ -248,6 +248,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             }
             drawTarget(ctx, targetCenterX + shakeX, targetCenterY + shakeY, controls.targetScale);
 
+            // Wind indicator above target
+            drawWindIndicator(ctx, targetCenterX + shakeX, targetCenterY + shakeY - 140 * controls.targetScale - 30, wind.current);
+
             // 4. Pinned arrow (after flight completes)
             if (pinnedArrow) {
                 drawPinnedArrow(ctx, targetCenterX + shakeX + pinnedArrow.x, targetCenterY + shakeY + pinnedArrow.y, 1.0);
@@ -513,23 +516,66 @@ const drawTarget = (ctx: CanvasRenderingContext2D, x: number, y: number, scale: 
     const bs = boardSize;
 
     // ── Ground shadow ──
-    ctx.fillStyle = 'rgba(0,0,0,0.15)';
-    ctx.beginPath(); ctx.ellipse(0, bs + 30, bs * 0.7, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath(); ctx.ellipse(0, bs + 55, bs * 0.8, 10, 0, 0, Math.PI * 2); ctx.fill();
 
-    // ── Wooden legs ──
-    const legW = 14;
-    const legH = 100;
-    // Left leg
-    ctx.fillStyle = '#6d4c2a';
-    ctx.fillRect(-bs * 0.55, bs * 0.1, legW, legH);
-    // Right leg
-    ctx.fillRect(bs * 0.55 - legW, bs * 0.1, legW, legH);
-    // Cross brace
-    ctx.fillRect(-bs * 0.55, legH * 0.5 + bs * 0.1, bs * 1.1, 10);
-    // Darker edge on legs
-    ctx.fillStyle = '#5a3d1e';
-    ctx.fillRect(-bs * 0.55, bs * 0.1, 3, legH);
-    ctx.fillRect(bs * 0.55 - 3, bs * 0.1, 3, legH);
+    // ── Wooden legs (angled, tapered — like an easel/A-frame) ──
+    const legTopW = 12;     // Width at top (where leg meets board)
+    const legBotW = 10;     // Width at bottom (ground)
+    const legH = 70;        // Leg height below board
+    const legSplay = 25;    // How far legs splay outward at bottom
+
+    // Left leg (angled outward)
+    ctx.save();
+    ctx.fillStyle = '#5e3a1a';
+    ctx.beginPath();
+    ctx.moveTo(-bs * 0.4 - legTopW / 2, bs + 2);             // Top-left
+    ctx.lineTo(-bs * 0.4 + legTopW / 2, bs + 2);             // Top-right
+    ctx.lineTo(-bs * 0.4 - legSplay + legBotW / 2, bs + legH); // Bottom-right
+    ctx.lineTo(-bs * 0.4 - legSplay - legBotW / 2, bs + legH); // Bottom-left
+    ctx.closePath();
+    ctx.fill();
+    // Wood grain highlight
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 0.8;
+    for (let i = 5; i < legH; i += 8) {
+        const t = i / legH;
+        const cx = -bs * 0.4 - legSplay * t;
+        ctx.beginPath(); ctx.moveTo(cx - 4, bs + 2 + i); ctx.lineTo(cx + 4, bs + 2 + i + 2); ctx.stroke();
+    }
+    // Dark inner edge
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-bs * 0.4 + legTopW / 2, bs + 2);
+    ctx.lineTo(-bs * 0.4 - legSplay + legBotW / 2, bs + legH);
+    ctx.stroke();
+    ctx.restore();
+
+    // Right leg (mirrored)
+    ctx.save();
+    ctx.fillStyle = '#5e3a1a';
+    ctx.beginPath();
+    ctx.moveTo(bs * 0.4 - legTopW / 2, bs + 2);
+    ctx.lineTo(bs * 0.4 + legTopW / 2, bs + 2);
+    ctx.lineTo(bs * 0.4 + legSplay + legBotW / 2, bs + legH);
+    ctx.lineTo(bs * 0.4 + legSplay - legBotW / 2, bs + legH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 0.8;
+    for (let i = 5; i < legH; i += 8) {
+        const t = i / legH;
+        const cx = bs * 0.4 + legSplay * t;
+        ctx.beginPath(); ctx.moveTo(cx - 4, bs + 2 + i); ctx.lineTo(cx + 4, bs + 2 + i + 2); ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bs * 0.4 - legTopW / 2, bs + 2);
+    ctx.lineTo(bs * 0.4 + legSplay - legBotW / 2, bs + legH);
+    ctx.stroke();
+    ctx.restore();
 
     // ── Wooden frame (border) ──
     const frameW = 16;
@@ -627,6 +673,72 @@ const drawTarget = (ctx: CanvasRenderingContext2D, x: number, y: number, scale: 
         ctx.fillStyle = isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.6)';
         ctx.fillText(`${np.score}`, 0, np.y);
     });
+
+    ctx.restore();
+};
+
+// Wind speed + direction indicator (displayed above target)
+const drawWindIndicator = (ctx: CanvasRenderingContext2D, x: number, y: number, wind: Point) => {
+    const strength = Math.sqrt(wind.x * wind.x + wind.y * wind.y);
+    const angle = Math.atan2(wind.y, wind.x);
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    // ── Background pill ──
+    const pillW = 140;
+    const pillH = 32;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.beginPath();
+    ctx.roundRect(-pillW / 2, -pillH / 2, pillW, pillH, pillH / 2);
+    ctx.fill();
+
+    // ── "WIND:" label ──
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ccc';
+    ctx.fillText('WIND:', -pillW / 2 + 12, 1);
+
+    // ── Speed value (yellow, bold) ──
+    ctx.font = 'bold 16px Arial, sans-serif';
+    ctx.fillStyle = '#FFD600';
+    ctx.fillText(strength.toFixed(1), 12, 1);
+
+    // ── Direction arrow in circle ──
+    const circleX = pillW / 2 - 18;
+    const circleR = 11;
+
+    // Yellow circle outline
+    ctx.strokeStyle = '#FFD600';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(circleX, 0, circleR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Arrow pointing in wind direction
+    ctx.save();
+    ctx.translate(circleX, 0);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#FFD600';
+    ctx.beginPath();
+    // Arrow shaft
+    ctx.moveTo(-5, 0);
+    ctx.lineTo(4, 0);
+    // Arrowhead
+    ctx.moveTo(3, -3.5);
+    ctx.lineTo(7, 0);
+    ctx.lineTo(3, 3.5);
+    ctx.closePath();
+    ctx.fill();
+    // Arrow shaft line
+    ctx.strokeStyle = '#FFD600';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-5, 0);
+    ctx.lineTo(4, 0);
+    ctx.stroke();
+    ctx.restore();
 
     ctx.restore();
 };
