@@ -15,6 +15,7 @@ interface Room {
   currentTurn: string;
   round: number;
   maxRounds: number;
+  wind: { x: number; y: number };
 }
 
 
