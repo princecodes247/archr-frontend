@@ -8,4 +8,8 @@ html, body, #root {
   padding: 0;
   overflow: hidden;
   touch-action: none; /* Prevent browser handling of gestures */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
