@@ -32,11 +32,30 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const controlPos = useRef<Point>({ x: 0, y: 0 });
     const wind = useRef<Point>({ x: 0, y: 0 });
     const isAiming = useRef(false);
-    const zoomLevel = useRef(1); // Smooth zoom interpolation
+    const zoomLevel = useRef(1);
     const swayPhase = useRef({ px1: Math.random() * 100, px2: Math.random() * 100, py1: Math.random() * 100, py2: Math.random() * 100 });
 
+    // Aim timer: 1.0 (full) → 0.0 (auto-fire)
+    const AIM_DURATION_FRAMES = 4 * 60; // ~4 seconds at 60fps
+    const aimTimer = useRef(1.0);
+    const shouldAutoFire = useRef(false);
+
+    // Arrow flight animation refs
+    const arrowFlight = useRef<{
+        active: boolean;
+        progress: number;
+        hitPoint: Point;
+    }>({ active: false, progress: 0, hitPoint: { x: 0, y: 0 } });
+
+    // Post-shot zoom state
+    const postShotZoom = useRef<{
+        active: boolean;
+        timer: number;     // countdown in frames
+        hitPoint: Point;   // zoom focus (relative to target center)
+    }>({ active: false, timer: 0, hitPoint: { x: 0, y: 0 } });
+
     // React State for rendered overlays
-    const [lastShotPath, setLastShotPath] = useState<Point[] | null>(null);
+    const [pinnedArrow, setPinnedArrow] = useState<Point | null>(null);
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastScore, setLastScore] = useState<number | null>(null);
     const [scoreFlash, setScoreFlash] = useState(0);
@@ -60,7 +79,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         socket.on('shotResult', (data: { path: Point[], score: number }) => {
             console.log('Shot Result:', data);
-            setLastShotPath(data.path);
+            // Start arrow flight animation
+            const hitPt = data.path[0] || { x: 0, y: 0 };
+            arrowFlight.current = { active: true, progress: 0, hitPoint: hitPt };
+            setPinnedArrow(null); // Clear old pinned arrow
             setLastScore(data.score);
             setScoreFlash(1);
         });
@@ -139,17 +161,34 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             }
 
             // ── Zoom Interpolation ──
-            const targetZoom = (isMyTurn && isAiming.current) ? 2.0 : 1.0;
-            zoomLevel.current += (targetZoom - zoomLevel.current) * 0.04;
+            // Three zoom phases: normal (1x), aiming (2x on target), post-shot (3x on hit)
+            const psz = postShotZoom.current;
+            let desiredZoom = 1.0;
+            let zoomFocusX = targetCenterX;
+            let zoomFocusY = targetCenterY;
+
+            if (psz.active) {
+                desiredZoom = 3.0;
+                zoomFocusX = targetCenterX + psz.hitPoint.x;
+                zoomFocusY = targetCenterY + psz.hitPoint.y;
+                psz.timer--;
+                if (psz.timer <= 0) {
+                    psz.active = false;
+                }
+            } else if (isMyTurn && isAiming.current) {
+                desiredZoom = 2.0;
+            }
+
+            zoomLevel.current += (desiredZoom - zoomLevel.current) * 0.06;
 
             // ── Drawing ──
             ctx.save();
 
-            // Apply zoom centered on target
+            // Apply zoom centered on focus point
             const zoom = zoomLevel.current;
-            ctx.translate(targetCenterX, targetCenterY);
+            ctx.translate(zoomFocusX, zoomFocusY);
             ctx.scale(zoom, zoom);
-            ctx.translate(-targetCenterX, -targetCenterY);
+            ctx.translate(-zoomFocusX, -zoomFocusY);
 
             // 1. Sky
             const skyGradient = ctx.createLinearGradient(0, 0, 0, h * 0.6);
@@ -181,30 +220,90 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             // 3. Target
             drawTarget(ctx, targetCenterX, targetCenterY, 0.6);
 
-            // 4. Hit marker
-            if (lastShotPath && lastShotPath.length > 0) {
-                const hit = lastShotPath[0];
+            // 4. Pinned arrow (after flight completes)
+            if (pinnedArrow) {
+                drawPinnedArrow(ctx, targetCenterX + pinnedArrow.x, targetCenterY + pinnedArrow.y);
+            }
+
+            // 5. Arrow flight animation
+            const flight = arrowFlight.current;
+            if (flight.active) {
+                flight.progress += 0.025; // ~40 frames to complete
+                const t = Math.min(flight.progress, 1);
+
+                // Start: bottom center of screen (bow position)
+                const startX = centerX;
+                const startY = h + 50; // Just below screen
+                // End: hit point on target
+                const endX = targetCenterX + flight.hitPoint.x;
+                const endY = targetCenterY + flight.hitPoint.y;
+                // Arc peak: midpoint with upward offset
+                const peakY = Math.min(startY, endY) - 200;
+
+                // Quadratic bezier interpolation
+                const midX = (startX + endX) / 2;
+                const ax = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * midX + t * t * endX;
+                const ay = (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * peakY + t * t * endY;
+
+                // Calculate angle from trajectory
+                const dt = 0.01;
+                const t2 = Math.min(t + dt, 1);
+                const ax2 = (1 - t2) * (1 - t2) * startX + 2 * (1 - t2) * t2 * midX + t2 * t2 * endX;
+                const ay2 = (1 - t2) * (1 - t2) * startY + 2 * (1 - t2) * t2 * peakY + t2 * t2 * endY;
+                const angle = Math.atan2(ay2 - ay, ax2 - ax);
+
+                // Draw flying arrow
                 ctx.save();
-                ctx.translate(targetCenterX + hit.x, targetCenterY + hit.y);
-                // Arrow stuck in target
-                ctx.fillStyle = '#5c4033';
-                ctx.fillRect(-2, -18, 4, 36); // shaft
+                ctx.translate(ax, ay);
+                ctx.rotate(angle);
+
+                // Shaft
+                ctx.strokeStyle = '#5c4033';
+                ctx.lineWidth = 3;
+                ctx.beginPath(); ctx.moveTo(-25, 0); ctx.lineTo(15, 0); ctx.stroke();
+
+                // Arrowhead
+                ctx.fillStyle = '#888';
+                ctx.beginPath();
+                ctx.moveTo(18, 0); ctx.lineTo(12, -4); ctx.lineTo(12, 4);
+                ctx.fill();
+
                 // Fletching
                 ctx.fillStyle = '#c0392b';
                 ctx.beginPath();
-                ctx.moveTo(-2, 18); ctx.lineTo(2, 18); ctx.lineTo(6, 24); ctx.lineTo(-6, 24);
+                ctx.moveTo(-25, 0); ctx.lineTo(-30, -5); ctx.lineTo(-22, 0);
                 ctx.fill();
-                // Impact point
-                ctx.fillStyle = 'rgba(0,0,0,0.4)';
-                ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(-25, 0); ctx.lineTo(-30, 5); ctx.lineTo(-22, 0);
+                ctx.fill();
+
                 ctx.restore();
+
+                // Flight complete → pin the arrow and trigger post-shot zoom
+                if (t >= 1) {
+                    flight.active = false;
+                    setPinnedArrow(flight.hitPoint);
+                    postShotZoom.current = {
+                        active: true,
+                        timer: 120, // ~2 seconds at 60fps
+                        hitPoint: flight.hitPoint
+                    };
+                }
             }
 
-            // 5. Reticle
+            // 6. Reticle + Aim Timer
             if (isMyTurn && isAiming.current) {
+                // Tick down the aim timer
+                aimTimer.current = Math.max(0, aimTimer.current - (1 / AIM_DURATION_FRAMES));
+
+                // Auto-fire when timer expires
+                if (aimTimer.current <= 0 && !shouldAutoFire.current) {
+                    shouldAutoFire.current = true;
+                }
+
                 const rx = targetCenterX + reticlePos.current.x;
                 const ry = targetCenterY + reticlePos.current.y;
-                drawReticle(ctx, rx, ry);
+                drawReticle(ctx, rx, ry, aimTimer.current);
             }
 
             ctx.restore(); // Undo zoom
@@ -217,18 +316,27 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 setScoreFlash(prev => Math.max(0, prev - 0.015));
             }
 
+            // Handle auto-fire (from timer expiry)
+            if (shouldAutoFire.current) {
+                shouldAutoFire.current = false;
+                isAiming.current = false;
+                socket?.emit('shoot', { aimPosition: reticlePos.current });
+            }
+
             animationFrameId = requestAnimationFrame(render);
         };
 
         render();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [isMyTurn, lastShotPath, roomState, lastScore, scoreFlash]);
+    }, [isMyTurn, pinnedArrow, roomState, lastScore, scoreFlash]);
 
     // ── Input Handlers ──
     const handleStart = () => {
         if (!isMyTurn) return;
         isAiming.current = true;
-        setLastShotPath(null);
+        aimTimer.current = 1.0; // Reset timer
+        shouldAutoFire.current = false;
+        setPinnedArrow(null);
         setLastScore(null);
     };
 
@@ -303,56 +411,217 @@ const drawTarget = (ctx: CanvasRenderingContext2D, x: number, y: number, scale: 
     ctx.translate(x, y);
     ctx.scale(scale, scale);
 
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    ctx.beginPath(); ctx.ellipse(0, 80, 50, 8, 0, 0, Math.PI * 2); ctx.fill();
+    const boardSize = 140; // Half-size of the board
+    const bs = boardSize;
 
-    // Legs
-    ctx.fillStyle = '#8b5a2b';
-    ctx.fillRect(-35, 0, 10, 80);
-    ctx.fillRect(25, 0, 10, 80);
-    ctx.fillRect(-40, 60, 80, 8);
+    // ── Ground shadow ──
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath(); ctx.ellipse(0, bs + 30, bs * 0.7, 12, 0, 0, Math.PI * 2); ctx.fill();
 
-    // Face
-    ctx.fillStyle = '#dcb35c';
-    ctx.fillRect(-55, -55, 110, 110);
+    // ── Wooden legs ──
+    const legW = 14;
+    const legH = 100;
+    // Left leg
+    ctx.fillStyle = '#6d4c2a';
+    ctx.fillRect(-bs * 0.55, bs * 0.1, legW, legH);
+    // Right leg
+    ctx.fillRect(bs * 0.55 - legW, bs * 0.1, legW, legH);
+    // Cross brace
+    ctx.fillRect(-bs * 0.55, legH * 0.5 + bs * 0.1, bs * 1.1, 10);
+    // Darker edge on legs
+    ctx.fillStyle = '#5a3d1e';
+    ctx.fillRect(-bs * 0.55, bs * 0.1, 3, legH);
+    ctx.fillRect(bs * 0.55 - 3, bs * 0.1, 3, legH);
 
-    // Rings
-    const rings = [
-        { r: 50, c: 'white' }, { r: 40, c: 'black' },
-        { r: 30, c: '#00bcd4' }, { r: 20, c: '#f44336' }, { r: 10, c: '#ffeb3b' }
+    // ── Wooden frame (border) ──
+    const frameW = 16;
+    // Frame background
+    ctx.fillStyle = '#7a4f2a';
+    ctx.fillRect(-bs - frameW, -bs - frameW, (bs + frameW) * 2, (bs + frameW) * 2);
+    // Wood grain lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1;
+    for (let i = -bs - frameW; i < bs + frameW; i += 6) {
+        ctx.beginPath();
+        ctx.moveTo(-bs - frameW, i); ctx.lineTo(bs + frameW, i + 3);
+        ctx.stroke();
+    }
+    // Frame highlight (top/left bevel)
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(-bs - frameW, -bs - frameW, (bs + frameW) * 2, 4);
+    ctx.fillRect(-bs - frameW, -bs - frameW, 4, (bs + frameW) * 2);
+    // Frame shadow (bottom/right bevel)
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(-bs - frameW, bs + frameW - 4, (bs + frameW) * 2, 4);
+    ctx.fillRect(bs + frameW - 4, -bs - frameW, 4, (bs + frameW) * 2);
+
+    // ── Corner bolts ──
+    const boltPositions = [
+        [-bs - 6, -bs - 6], [bs + 6, -bs - 6],
+        [-bs - 6, bs + 6], [bs + 6, bs + 6]
     ];
+    boltPositions.forEach(([bx, by]) => {
+        ctx.fillStyle = '#999';
+        ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#777';
+        ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI * 2); ctx.fill();
+        // Screw slot
+        ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(bx - 2, by); ctx.lineTo(bx + 2, by); ctx.stroke();
+    });
+
+    // ── White backing (target paper) ──
+    ctx.fillStyle = '#f0ece4';
+    ctx.fillRect(-bs, -bs, bs * 2, bs * 2);
+    // Subtle paper texture
+    ctx.fillStyle = 'rgba(0,0,0,0.02)';
+    for (let ty = -bs; ty < bs; ty += 4) {
+        for (let tx = -bs; tx < bs; tx += 4) {
+            if (Math.random() > 0.5) ctx.fillRect(tx, ty, 4, 4);
+        }
+    }
+
+    // ── Target rings (WA Archery standard) ──
+    // Rings from outside in: score 1-10
+    // Colors: white(1-2), white(3), black(3-4), blue(5-6), red(7-8), gold(9-10), gold X
+    const rings: { r: number; fill: string; score: number }[] = [
+        { r: 120, fill: '#e8e4dc', score: 1 },  // white
+        { r: 108, fill: '#e0dcd4', score: 2 },  // white
+        { r: 96, fill: '#d8d4cc', score: 3 },   // light gray
+        { r: 84, fill: '#222', score: 4 },   // black
+        { r: 72, fill: '#333', score: 5 },   // black
+        { r: 60, fill: '#2196F3', score: 6 },   // blue
+        { r: 48, fill: '#1976D2', score: 7 },   // blue
+        { r: 36, fill: '#f44336', score: 8 },   // red
+        { r: 28, fill: '#d32f2f', score: 9 },   // red
+        { r: 18, fill: '#FFD600', score: 10 },  // gold/yellow
+    ];
+
     rings.forEach(ring => {
         ctx.beginPath(); ctx.arc(0, 0, ring.r, 0, Math.PI * 2);
-        ctx.fillStyle = ring.c; ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = ring.fill; ctx.fill();
+        // Ring border
+        ctx.strokeStyle = 'rgba(0,0,0,0.15)'; ctx.lineWidth = 0.8; ctx.stroke();
     });
+
+    // Inner X ring (bullseye)
+    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFC107'; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.5; ctx.stroke();
+
+    // Center cross
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(4, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(0, 4); ctx.stroke();
+
+    // ── Score numbers ──
+    ctx.font = 'bold 10px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Place numbers at bottom of each ring zone
+    const numberPositions = [
+        { score: 1, y: 114 }, { score: 2, y: 102 }, { score: 3, y: 90 },
+        { score: 4, y: 78 }, { score: 5, y: 66 }, { score: 6, y: 54 },
+        { score: 7, y: 42 }, { score: 8, y: 32 }, { score: 9, y: 23 },
+    ];
+    numberPositions.forEach(np => {
+        const isLight = np.score <= 3;
+        ctx.fillStyle = isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.6)';
+        ctx.fillText(`${np.score}`, 0, np.y);
+    });
+
     ctx.restore();
 };
 
-const drawReticle = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
+const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
     ctx.save();
     ctx.translate(x, y);
 
-    // Outer glow
-    ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
-    ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(0, 0, 24, 0, Math.PI * 2); ctx.stroke();
+    // Impact hole
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
 
-    // Main circle
+    // Shaft protruding outward (foreshortened — viewed from front)
+    ctx.fillStyle = '#5c4033';
+    ctx.fillRect(-1.5, -3, 3, -18); // Short shaft sticking "out" (drawn upward for perspective)
+
+    // Fletching (two fins at the end of the shaft)
+    const fY = -21;
+    ctx.fillStyle = '#c0392b';
+    ctx.beginPath();
+    ctx.moveTo(0, fY); ctx.lineTo(-6, fY - 8); ctx.lineTo(0, fY - 4);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0, fY); ctx.lineTo(6, fY - 8); ctx.lineTo(0, fY - 4);
+    ctx.fill();
+
+    // Nock (small circle at end)
+    ctx.fillStyle = '#888';
+    ctx.beginPath(); ctx.arc(0, fY - 4, 1.5, 0, Math.PI * 2); ctx.fill();
+
+    ctx.restore();
+};
+
+const drawReticle = (ctx: CanvasRenderingContext2D, x: number, y: number, timerFraction: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+
+    const outerR = 32;
+    const innerR = 20;
+
+    // ── Timer arc (outer ring) ──
+    // Background track (dim)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(0, 0, outerR, 0, Math.PI * 2); ctx.stroke();
+
+    // Active timer arc — color shifts green → yellow → red
+    const startAngle = -Math.PI / 2; // 12 o'clock
+    const endAngle = startAngle + timerFraction * Math.PI * 2;
+
+    let timerColor: string;
+    let glowColor: string;
+    if (timerFraction > 0.5) {
+        timerColor = '#4ade80';
+        glowColor = 'rgba(74, 222, 128, 0.3)';
+    } else if (timerFraction > 0.25) {
+        timerColor = '#facc15';
+        glowColor = 'rgba(250, 204, 21, 0.3)';
+    } else {
+        timerColor = '#ef4444';
+        glowColor = 'rgba(239, 68, 68, 0.3)';
+    }
+
+    // Glow behind the arc
+    ctx.strokeStyle = glowColor;
+    ctx.lineWidth = 9;
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.arc(0, 0, outerR, startAngle, endAngle); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Main timer arc
+    ctx.strokeStyle = timerColor;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(0, 0, outerR, startAngle, endAngle); ctx.stroke();
+    ctx.lineCap = 'butt';
+
+    // ── Inner circle ──
+    ctx.strokeStyle = 'rgba(255, 50, 50, 0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, innerR, 0, Math.PI * 2); ctx.stroke();
+
+    // ── Crosshair lines (with gap in center) ──
     ctx.strokeStyle = 'rgba(255, 50, 50, 0.9)';
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI * 2); ctx.stroke();
-
-    // Crosshair lines (with gap in center)
     ctx.beginPath();
-    ctx.moveTo(0, -30); ctx.lineTo(0, -6);
-    ctx.moveTo(0, 6); ctx.lineTo(0, 30);
-    ctx.moveTo(-30, 0); ctx.lineTo(-6, 0);
-    ctx.moveTo(6, 0); ctx.lineTo(30, 0);
+    ctx.moveTo(0, -outerR + 2); ctx.lineTo(0, -6);
+    ctx.moveTo(0, 6); ctx.lineTo(0, outerR - 2);
+    ctx.moveTo(-outerR + 2, 0); ctx.lineTo(-6, 0);
+    ctx.moveTo(6, 0); ctx.lineTo(outerR - 2, 0);
     ctx.stroke();
 
-    // Center dot
+    // ── Center dot ──
     ctx.fillStyle = 'rgba(255, 50, 50, 0.9)';
     ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill();
 
