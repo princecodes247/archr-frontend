@@ -645,13 +645,32 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
     const shaftR1 = 1.3;   // Slim shaft (matches ferrule inner radius)
     const shaftR2 = 1.3;   // Same width — straight cylinder, no taper
 
-    // ── 1. Shadow ellipse under shaft (depth contact) ──
+    // ── 1. Arrow-shaped shadow (traces silhouette, offset for depth) ──
+    const shadowOx = 4;   // Shadow offset X (light from upper-left)
+    const shadowOy = 5;   // Shadow offset Y
     ctx.save();
-    ctx.globalAlpha = 0.2 * animProgress;
+    ctx.globalAlpha = 0.18 * animProgress;
     ctx.fillStyle = '#000';
+    ctx.filter = 'blur(3px)';
     ctx.beginPath();
-    ctx.ellipse(3, 2, shaftLen * 0.6, 3.5, tiltAngle + 0.3, 0, Math.PI * 2);
+    // Broadhead blades (bottom)
+    ctx.moveTo(shadowOx - 5, shadowOy + 3);
+    ctx.lineTo(shadowOx, shadowOy - 2);
+    ctx.lineTo(shadowOx + 5, shadowOy + 3);
+    // Shaft right edge (going up)
+    ctx.lineTo(shadowOx + shaftR1, shadowOy);
+    ctx.lineTo(shadowOx + shaftR2, shadowOy - shaftLen);
+    // Right fletching wing
+    ctx.lineTo(shadowOx + 14, shadowOy - shaftLen - 18);
+    ctx.lineTo(shadowOx + 0, shadowOy - shaftLen - 18 * 0.7);
+    // Left fletching wing
+    ctx.lineTo(shadowOx - 14, shadowOy - shaftLen - 18);
+    ctx.lineTo(shadowOx - shaftR2, shadowOy - shaftLen);
+    // Shaft left edge (going back down)
+    ctx.lineTo(shadowOx - shaftR1, shadowOy);
+    ctx.closePath();
     ctx.fill();
+    ctx.filter = 'none';
     ctx.restore();
 
     // // ── 2. Board indentation circle (1-2px pressed-in ring) ──
