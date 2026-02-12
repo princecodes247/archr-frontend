@@ -53,9 +53,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     // ── Leva GUI Controls ──
     const controls = useControls({
         'Drift Physics': folder({
-            steeringPower: { value: 0.15, min: 0.01, max: 1.0, step: 0.01, label: 'Steering Power' },
-            maxSpeed: { value: 4.0, min: 0.5, max: 15.0, step: 0.1, label: 'Max Speed' },
-            minSpeed: { value: 0.4, min: 0.0, max: 3.0, step: 0.1, label: 'Min Speed' },
+            dragSensitivity: { value: 0.5, min: 0.1, max: 2.0, step: 0.05, label: 'Drag Sensitivity' },
+            friction: { value: 0.85, min: 0.5, max: 0.99, step: 0.01, label: 'Friction' },
+            driftSpeed: { value: 0.3, min: 0.0, max: 2.0, step: 0.1, label: 'Random Drift' },
         }),
         'Aiming': folder({
             timerSeconds: { value: 5.0, min: 1.0, max: 15.0, step: 0.5, label: 'Timer (s)' },
@@ -233,29 +233,36 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 const m = momentum.current;
                 const buf = inputBuffer.current;
 
-                // 1. Add accumulated input as thrust (delta based steering)
-                m.x += buf.x * controls.steeringPower;
-                m.y += buf.y * controls.steeringPower;
+                // 1. Apply drag input directly (screen-space deltas scaled by sensitivity)
+                m.x += buf.x * controls.dragSensitivity;
+                m.y += buf.y * controls.dragSensitivity;
 
-                // Clear buffer for next frame
+                // Clear buffer
                 buf.x = 0;
                 buf.y = 0;
 
-                // 2. Bound speed: Clamp to [MIN_SPEED, MAX_SPEED]
-                const speed = Math.sqrt(m.x * m.x + m.y * m.y);
-                if (speed > controls.maxSpeed) {
-                    const scale = controls.maxSpeed / speed;
-                    m.x *= scale;
-                    m.y *= scale;
-                } else if (speed < controls.minSpeed && speed > 0.001) {
-                    const scale = controls.minSpeed / speed;
-                    m.x *= scale;
-                    m.y *= scale;
-                }
+                // 2. Apply friction (momentum decays naturally)
+                m.x *= controls.friction;
+                m.y *= controls.friction;
 
-                // 3. Apply momentum to position
+                // 3. Add gentle random drift so crosshair is never perfectly still
+                const driftAngle = performance.now() * 0.002;
+                m.x += Math.sin(driftAngle * 1.3) * controls.driftSpeed * 0.1;
+                m.y += Math.cos(driftAngle * 0.9) * controls.driftSpeed * 0.1;
+
+                // 4. Apply momentum to position
                 reticlePos.current.x += m.x;
                 reticlePos.current.y += m.y;
+
+                // 5. Clamp to target area (keep within ~150px of center)
+                const maxR = 160;
+                const rx = reticlePos.current.x;
+                const ry = reticlePos.current.y;
+                const dist = Math.sqrt(rx * rx + ry * ry);
+                if (dist > maxR) {
+                    reticlePos.current.x = (rx / dist) * maxR;
+                    reticlePos.current.y = (ry / dist) * maxR;
+                }
 
             } else if (!isMyTurn) {
                 reticlePos.current = { x: 0, y: 0 };
@@ -553,51 +560,42 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const cx = canvas.width / 2;
-        const cy = canvas.height * 0.55 + 80;
-        const zoom = zoomLevel.current;
-        const worldX = (x - cx) / zoom;
-        const worldY = (y - cy) / zoom;
+        // Only allow aiming from the bottom 40% of the screen
+        if (y < canvas.height * 0.6) return;
 
         isAiming.current = true;
         aimTimer.current = 1.0;
         shouldAutoFire.current = false;
 
-        // Snap reticle to finger position
-        reticlePos.current = { x: worldX, y: worldY };
-        lastInputPos.current = { x: worldX, y: worldY };
-        inputBuffer.current = { x: 0, y: 0 };
-
-        // Start with a gentle random drift (never stands still)
-        const angle = Math.random() * Math.PI * 2;
-        momentum.current = {
-            x: Math.cos(angle) * controls.minSpeed, // Updated from controls.drift.minSpeed
-            y: Math.sin(angle) * controls.minSpeed // Updated from controls.drift.minSpeed
+        // Random start position: one of 6 spots around the target edge
+        const targetRadius = 100; // approx target radius in world units
+        const slotIndex = Math.floor(Math.random() * 6);
+        const spawnAngle = (slotIndex / 6) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+        reticlePos.current = {
+            x: Math.cos(spawnAngle) * targetRadius * (0.6 + Math.random() * 0.4),
+            y: Math.sin(spawnAngle) * targetRadius * (0.6 + Math.random() * 0.4)
         };
+
+        // Track raw screen position for delta calculation
+        lastInputPos.current = { x, y };
+        inputBuffer.current = { x: 0, y: 0 };
+        momentum.current = { x: 0, y: 0 };
 
         setLastScore(null);
     };
 
     const handleMove = (x: number, y: number) => {
         if (!isMyTurn || !isAiming.current) return;
-        const canvas = canvasRef.current;
-        if (!canvas) return;
 
-        const cx = canvas.width / 2;
-        const cy = canvas.height * 0.55 + 80;
-        const zoom = zoomLevel.current;
-        const worldX = (x - cx) / zoom;
-        const worldY = (y - cy) / zoom;
-
+        // Use raw screen-space deltas (not world-space) for predictable control
         if (lastInputPos.current) {
-            const dx = worldX - lastInputPos.current.x;
-            const dy = worldY - lastInputPos.current.y;
-            // Accumulate delta for the physics loop
+            const dx = x - lastInputPos.current.x;
+            const dy = y - lastInputPos.current.y;
             inputBuffer.current.x += dx;
             inputBuffer.current.y += dy;
         }
 
-        lastInputPos.current = { x: worldX, y: worldY };
+        lastInputPos.current = { x, y };
     };
 
     const handleEnd = () => {
@@ -1357,11 +1355,49 @@ const drawHUD = (
         ctx.restore();
     }
 
-    // ── Bottom instruction ──
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    // ── Drag Zone Indicator ──
+    const dragZoneY = h * 0.6;
+    const isActive = room?.currentTurn === myId;
+
+    // Gradient overlay on drag zone
+    if (isActive) {
+        const zoneGrad = ctx.createLinearGradient(0, dragZoneY, 0, h);
+        zoneGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+        zoneGrad.addColorStop(0.2, 'rgba(255, 255, 255, 0.06)');
+        zoneGrad.addColorStop(1, 'rgba(255, 255, 255, 0.12)');
+        ctx.fillStyle = zoneGrad;
+        ctx.fillRect(0, dragZoneY, w, h - dragZoneY);
+    }
+
+    // Divider line
+    ctx.save();
+    ctx.strokeStyle = isActive ? 'rgba(255, 255, 255, 0.30)' : 'rgba(255, 255, 255, 0.10)';
+    ctx.setLineDash([8, 6]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(40, dragZoneY);
+    ctx.lineTo(w - 40, dragZoneY);
+    ctx.stroke();
+    ctx.restore();
+
+    // Grip dots — centered row at divider
+    if (isActive) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        const dotCount = 5;
+        const dotSpacing = 8;
+        const dotsStartX = w / 2 - ((dotCount - 1) * dotSpacing) / 2;
+        for (let i = 0; i < dotCount; i++) {
+            ctx.beginPath();
+            ctx.arc(dotsStartX + i * dotSpacing, dragZoneY, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Bottom instruction
+    ctx.fillStyle = isActive ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)';
     ctx.font = '13px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('Tap & hold to aim · Release to shoot', w / 2, h - 20);
+    ctx.fillText(isActive ? 'Tap & drag below to aim · Release to shoot' : 'Waiting for opponent...', w / 2, h - 20);
 };
 
 export default GameCanvas;
