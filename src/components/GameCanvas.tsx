@@ -25,6 +25,28 @@ interface RoomState {
     wind: Point;
 }
 
+// Player fletching color palettes
+interface FletchingColors {
+    grad: [string, string, string, string]; // gradient stops
+    inner: string;                          // inner face
+    outline: string;                        // outline stroke
+    highlight: string;                      // sheen highlight
+}
+const FLETCHING_PALETTES: FletchingColors[] = [
+    { // Player 1: Red
+        grad: ['#E83030', '#F04545', '#DD2020', '#AA1515'],
+        inner: 'rgba(120, 15, 15, 0.4)',
+        outline: 'rgba(80, 0, 0, 0.35)',
+        highlight: 'rgba(255, 180, 180, 0.2)',
+    },
+    { // Player 2: Blue
+        grad: ['#2060E8', '#3575F0', '#1850DD', '#1035AA'],
+        inner: 'rgba(15, 30, 120, 0.4)',
+        outline: 'rgba(0, 0, 80, 0.35)',
+        highlight: 'rgba(180, 200, 255, 0.2)',
+    },
+];
+
 const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -87,12 +109,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         trail: TrailPoint[];  // motion trail
         particles: Particle[];// impact dust
         flashFrames: number;  // impact flash countdown
+        playerIndex: number;  // who shot this arrow
     }>({
         active: false, elapsed: 0, duration: 550,
         hitPoint: { x: 0, y: 0 },
         startX: 0, startY: 0, endX: 0, endY: 0,
         windX: 0, windY: 0, arcHeight: 180,
-        trail: [], particles: [], flashFrames: 0
+        trail: [], particles: [], flashFrames: 0, playerIndex: 0
     });
 
     // DeltaTime tracking
@@ -104,10 +127,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     // Impact animation (overshoot + bounce + squash when arrow lands)
     const arrowImpact = useRef<{
         active: boolean;
-        frame: number;       // Current frame of impact anim
-        totalFrames: number; // Duration (~12 frames = 0.2s)
+        frame: number;
+        totalFrames: number;
         hitPoint: Point;
-    }>({ active: false, frame: 0, totalFrames: 12, hitPoint: { x: 0, y: 0 } });
+        playerIndex: number;
+    }>({ active: false, frame: 0, totalFrames: 12, hitPoint: { x: 0, y: 0 }, playerIndex: 0 });
 
     // Board shake on impact
     const boardShake = useRef<{ x: number; y: number; decay: number }>({
@@ -122,8 +146,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     }>({ active: false, timer: 0, hitPoint: { x: 0, y: 0 } });
 
     // React State for rendered overlays
-    const [pinnedArrows, setPinnedArrows] = useState<Point[]>([]);
-    const [roomState, setRoomState] = useState<RoomState | null>(null);
+    interface PinnedArrow { point: Point; playerIndex: number; }
+    const [pinnedArrows, setPinnedArrows] = useState<PinnedArrow[]>([]);
+    const roomStateRef = useRef<RoomState | null>(null);
     const [lastScore, setLastScore] = useState<number | null>(null);
     const [scoreFlash, setScoreFlash] = useState(0);
     const pendingScore = useRef<number | null>(null);
@@ -132,16 +157,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         if (!socket) return;
 
         socket.on('gameState', (room: RoomState) => {
+            console.log('Game State:', room);
             if (room.wind) {
                 wind.current = room.wind;
             }
-            setRoomState(room);
+            roomStateRef.current = room;
         });
 
-        socket.on('shotResult', (data: { path: Point[], score: number }) => {
+        socket.on('shotResult', (data: { player: string, path: Point[], score: number }) => {
             console.log('Shot Result:', data);
             const hitPt = data.path[0] || { x: 0, y: 0 };
 
+            // Determine player index for fletching color
+            const pIdx = roomStateRef.current?.players.findIndex(p => p.id === data.player) ?? 0;
+            console.log({ pIdx, roomStateRef, data })
             // Compute flight start/end in screen space (will be resolved in render)
             const f = arrowFlight.current;
             f.active = true;
@@ -156,6 +185,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             f.trail = [];
             f.particles = [];
             f.flashFrames = 0;
+            f.playerIndex = pIdx;
 
             setPinnedArrows(prev => prev.slice(0)); // Keep existing arrows
             pendingScore.current = data.score; // Defer until arrow lands
@@ -323,7 +353,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             // 4. Pinned arrow (after flight completes)
             if (pinnedArrows.length > 0) {
                 for (const pa of pinnedArrows) {
-                    drawPinnedArrow(ctx, targetCenterX + shakeX + pa.x, targetCenterY + shakeY + pa.y, 1.0);
+                    drawPinnedArrow(ctx, targetCenterX + shakeX + pa.point.x, targetCenterY + shakeY + pa.point.y, 1.0, FLETCHING_PALETTES[pa.playerIndex % FLETCHING_PALETTES.length]);
                 }
             }
 
@@ -344,13 +374,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 ctx.translate(ax, ay);
                 ctx.scale(bounce, squash);
                 ctx.translate(-ax, -ay);
-                drawPinnedArrow(ctx, ax, ay, t);
+                drawPinnedArrow(ctx, ax, ay, t, FLETCHING_PALETTES[arrowImpact.current.playerIndex % FLETCHING_PALETTES.length]);
                 ctx.restore();
 
                 if (impact.frame >= impact.totalFrames) {
                     impact.active = false;
                     setPinnedArrows(prev => {
-                        const next = [...prev, impact.hitPoint];
+                        const next = [...prev, { point: impact.hitPoint, playerIndex: impact.playerIndex }];
                         return next.length > controls.maxArrows ? next.slice(next.length - controls.maxArrows) : next;
                     });
                 }
@@ -434,7 +464,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 headGrad.addColorStop(1, '#888');
                 ctx.fillStyle = headGrad;
                 ctx.beginPath(); ctx.moveTo(22, 0); ctx.lineTo(14, -4); ctx.lineTo(14, 4); ctx.closePath(); ctx.fill();
-                ctx.fillStyle = '#D03030';
+                const fletchColor = FLETCHING_PALETTES[flight.playerIndex % FLETCHING_PALETTES.length].grad[0];
+                ctx.fillStyle = fletchColor;
                 ctx.beginPath(); ctx.moveTo(-28, 0); ctx.lineTo(-35, -6); ctx.lineTo(-26, -1); ctx.closePath(); ctx.fill();
                 ctx.beginPath(); ctx.moveTo(-28, 0); ctx.lineTo(-35, 6); ctx.lineTo(-26, 1); ctx.closePath(); ctx.fill();
                 ctx.fillStyle = '#ddd';
@@ -458,7 +489,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                         });
                     }
                     flight.flashFrames = 4;
-                    arrowImpact.current = { active: true, frame: 0, totalFrames: 12, hitPoint: flight.hitPoint };
+                    arrowImpact.current = { active: true, frame: 0, totalFrames: 12, hitPoint: flight.hitPoint, playerIndex: flight.playerIndex };
                     boardShake.current = { x: (Math.random() - 0.5) * 4, y: (Math.random() - 0.5) * 3, decay: 1.0 };
                     postShotZoom.current = { active: true, timer: Math.floor(60 * controls.holdTime), hitPoint: flight.hitPoint };
                     // Now show the score
@@ -502,7 +533,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             }
 
             ctx.restore(); // Undo zoom
-            drawHUD(ctx, w, h, wind.current, roomState, socket?.id, lastScore, scoreFlash);
+            drawHUD(ctx, w, h, wind.current, roomStateRef.current, socket?.id, lastScore, scoreFlash);
             if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.005));
             if (shouldAutoFire.current) {
                 shouldAutoFire.current = false; isAiming.current = false;
@@ -514,7 +545,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         render();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [isMyTurn, pinnedArrows, roomState, lastScore, scoreFlash]);
+    }, [isMyTurn, pinnedArrows, roomStateRef.current, lastScore, scoreFlash]);
 
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
@@ -857,7 +888,7 @@ const drawWindIndicator = (ctx: CanvasRenderingContext2D, x: number, y: number, 
     ctx.restore();
 };
 
-const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, animProgress: number = 1.0) => {
+const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, animProgress: number = 1.0, colors: FletchingColors = FLETCHING_PALETTES[0]) => {
     ctx.save();
     ctx.translate(x, y);
 
@@ -1042,10 +1073,10 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
 
         // Main vane face
         const vGrad = ctx.createLinearGradient(attachX, attachY, tipX, tipY);
-        vGrad.addColorStop(0, '#E83030');
-        vGrad.addColorStop(0.4, '#F04545');
-        vGrad.addColorStop(0.7, '#DD2020');
-        vGrad.addColorStop(1, '#AA1515');
+        vGrad.addColorStop(0, colors.grad[0]);
+        vGrad.addColorStop(0.4, colors.grad[1]);
+        vGrad.addColorStop(0.7, colors.grad[2]);
+        vGrad.addColorStop(1, colors.grad[3]);
         ctx.fillStyle = vGrad;
 
         ctx.beginPath();
@@ -1059,7 +1090,7 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
         ctx.fill();
 
         // Inner face (darker — depth)
-        ctx.fillStyle = 'rgba(120, 15, 15, 0.4)';
+        ctx.fillStyle = colors.inner;
         ctx.beginPath();
         ctx.moveTo(attachX, attachY);
         ctx.lineTo(innerX, innerY);
@@ -1068,7 +1099,7 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
         ctx.fill();
 
         // Outline
-        ctx.strokeStyle = 'rgba(80, 0, 0, 0.35)';
+        ctx.strokeStyle = colors.outline;
         ctx.lineWidth = 0.6;
         ctx.beginPath();
         ctx.moveTo(attachX, attachY);
@@ -1081,7 +1112,7 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
         ctx.stroke();
 
         // Highlight streak
-        ctx.strokeStyle = 'rgba(255, 180, 180, 0.2)';
+        ctx.strokeStyle = colors.highlight;
         ctx.lineWidth = 0.8;
         ctx.beginPath();
         ctx.moveTo(d * 1.5, attachY - 2);
