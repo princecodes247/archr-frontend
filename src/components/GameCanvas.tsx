@@ -41,18 +41,21 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         }),
         'Result': folder({
             resultZoom: { value: 3.0, min: 1.0, max: 6.0, step: 0.1, label: 'Result Zoom' },
-            holdTime: { value: 2.0, min: 0.5, max: 5.0, step: 0.1, label: 'Hold Duration (s)' },
+            holdTime: { value: 3.2, min: 0.5, max: 5.0, step: 0.1, label: 'Hold Duration (s)' },
         }),
         'Target': folder({
             targetScale: { value: 0.6, min: 0.1, max: 2.0, step: 0.1, label: 'Target Size' },
         }),
         'Flight Animation': folder({
-            flightDuration: { value: 550, min: 200, max: 2000, step: 50, label: 'Duration (ms)' },
+            flightDuration: { value: 350, min: 200, max: 2000, step: 50, label: 'Duration (ms)' },
             arcHeightFactor: { value: 0.20, min: 0.01, max: 0.5, step: 0.01, label: 'Arc Height %' },
             windDriftXFactor: { value: 6.0, min: 0.0, max: 20.0, step: 0.5, label: 'Wind Drift X' },
             windDriftYFactor: { value: 3.0, min: 0.0, max: 10.0, step: 0.5, label: 'Wind Drift Y' },
             slowMoThreshold: { value: 0.95, min: 0.5, max: 1.0, step: 0.01, label: 'Slow-mo Start' },
             slowMoSpeed: { value: 0.8, min: 0.1, max: 1.0, step: 0.05, label: 'Slow-mo Speed' },
+        }),
+        'Arrows': folder({
+            maxArrows: { value: 3, min: 1, max: 10, step: 1, label: 'Max Retained Arrows' },
         })
     });
 
@@ -119,7 +122,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     }>({ active: false, timer: 0, hitPoint: { x: 0, y: 0 } });
 
     // React State for rendered overlays
-    const [pinnedArrow, setPinnedArrow] = useState<Point | null>(null);
+    const [pinnedArrows, setPinnedArrows] = useState<Point[]>([]);
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastScore, setLastScore] = useState<number | null>(null);
     const [scoreFlash, setScoreFlash] = useState(0);
@@ -154,7 +157,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             f.particles = [];
             f.flashFrames = 0;
 
-            setPinnedArrow(null);
+            setPinnedArrows(prev => prev.slice(0)); // Keep existing arrows
             pendingScore.current = data.score; // Defer until arrow lands
 
             // Release camera zoom bump
@@ -246,6 +249,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                 if (psz.timer <= 0) {
                     psz.active = false;
                 }
+            } else if (arrowFlight.current.active) {
+                // Start zooming toward hit point during flight (last 30%)
+                const ft = arrowFlight.current.elapsed / arrowFlight.current.duration;
+                if (ft > 0.7) {
+                    const zoomBlend = (ft - 0.7) / 0.3; // 0→1 over last 30%
+                    desiredZoom = 1.0 + (controls.resultZoom - 1.0) * zoomBlend;
+                    zoomFocusX = targetCenterX + arrowFlight.current.hitPoint.x;
+                    zoomFocusY = targetCenterY + arrowFlight.current.hitPoint.y;
+                }
             } else if (isMyTurn && isAiming.current) {
                 desiredZoom = controls.aimZoom;
             }
@@ -309,8 +321,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             drawWindIndicator(ctx, targetCenterX + shakeX, targetCenterY + shakeY - 140 * controls.targetScale - 30, wind.current);
 
             // 4. Pinned arrow (after flight completes)
-            if (pinnedArrow) {
-                drawPinnedArrow(ctx, targetCenterX + shakeX + pinnedArrow.x, targetCenterY + shakeY + pinnedArrow.y, 1.0);
+            if (pinnedArrows.length > 0) {
+                for (const pa of pinnedArrows) {
+                    drawPinnedArrow(ctx, targetCenterX + shakeX + pa.x, targetCenterY + shakeY + pa.y, 1.0);
+                }
             }
 
             // 4b. Impact animation (arrow landing with overshoot/bounce)
@@ -335,7 +349,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
                 if (impact.frame >= impact.totalFrames) {
                     impact.active = false;
-                    setPinnedArrow(impact.hitPoint);
+                    setPinnedArrows(prev => {
+                        const next = [...prev, impact.hitPoint];
+                        return next.length > controls.maxArrows ? next.slice(next.length - controls.maxArrows) : next;
+                    });
                 }
             }
 
@@ -497,11 +514,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         render();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [isMyTurn, pinnedArrow, roomState, lastScore, scoreFlash]);
+    }, [isMyTurn, pinnedArrows, roomState, lastScore, scoreFlash]);
 
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
-        if (!isMyTurn || postShotZoom.current.active) return;
+        if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -527,7 +544,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             y: Math.sin(angle) * controls.minSpeed // Updated from controls.drift.minSpeed
         };
 
-        setPinnedArrow(null);
         setLastScore(null);
     };
 
