@@ -213,14 +213,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             const now = performance.now();
             const deltaTime = Math.min(now - lastFrameTime.current, 50); // Cap at 50ms
             lastFrameTime.current = now;
-            // Resize
-            if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
+            // Resize (account for devicePixelRatio for sharp rendering on mobile)
+            const dpr = window.devicePixelRatio || 1;
+            const displayW = window.innerWidth;
+            const displayH = window.innerHeight;
+
+            // Resize buffer if mismatch
+            if (canvas.width !== displayW * dpr || canvas.height !== displayH * dpr) {
+                canvas.width = displayW * dpr;
+                canvas.height = displayH * dpr;
+                canvas.style.width = displayW + 'px';
+                canvas.style.height = displayH + 'px';
             }
 
-            const w = canvas.width;
-            const h = canvas.height;
+            // Always enforce scale every frame to prevent state drift
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            const w = displayW;
+            const h = displayH;
             const centerX = w / 2;
             const horizonY = h * 0.55;
             const targetCenterX = centerX;
@@ -561,14 +571,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         if (!canvas) return;
 
         // Only allow aiming from the bottom 40% of the screen
-        if (y < canvas.height * 0.6) return;
+        // Use window height for consistent CSS pixel check
+        if (y < window.innerHeight * 0.6) return;
 
         isAiming.current = true;
         aimTimer.current = 1.0;
         shouldAutoFire.current = false;
 
         // Random start position: one of 6 spots around the target edge
-        const targetRadius = 100; // approx target radius in world units
+        // Note: Reticle position is in CSS pixels relative to target center
+        const targetRadius = 100;
         const slotIndex = Math.floor(Math.random() * 6);
         const spawnAngle = (slotIndex / 6) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
         reticlePos.current = {
