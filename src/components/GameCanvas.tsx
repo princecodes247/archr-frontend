@@ -64,6 +64,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         'Result': folder({
             resultZoom: { value: 3.0, min: 1.0, max: 6.0, step: 0.1, label: 'Result Zoom' },
             holdTime: { value: 3.2, min: 0.5, max: 5.0, step: 0.1, label: 'Hold Duration (s)' },
+            gameOverDelay: { value: 1000, min: 0, max: 2000, step: 100, label: 'Game Over Delay (ms)' },
         }),
         'Target': folder({
             targetScale: { value: 0.6, min: 0.1, max: 2.0, step: 0.1, label: 'Target Size' },
@@ -91,10 +92,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     const zoomLevel = useRef(1);
 
     // Aim timer: 1.0 (full) → 0.0 (auto-fire)
-    const aimTimer = useRef(1.0);
-    const shouldAutoFire = useRef(false);
+    const aimTimer = useRef<number>(0);
+    const gameOverTimer = useRef<number>(0);
+    const shouldAutoFire = useRef<boolean>(false);
 
-    // Arrow flight animation refs
+    // Zoom / Camera stateion refs
     interface TrailPoint { x: number; y: number; angle: number; alpha: number; }
     interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; r: number; }
     const arrowFlight = useRef<{
@@ -550,12 +552,26 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
             }
 
             ctx.restore(); // Undo zoom
-            drawHUD(ctx, w, h, wind.current, roomStateRef.current, socket?.id, lastScore, scoreFlash);
-            if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.005));
-            if (shouldAutoFire.current) {
-                shouldAutoFire.current = false; isAiming.current = false;
-                socket?.emit('shoot', { aimPosition: reticlePos.current });
+
+            // 8. HUD & Game Over
+            if (roomStateRef.current) {
+                // Check for Game Over
+                if (roomStateRef.current.round > roomStateRef.current.maxRounds) {
+                    gameOverTimer.current += deltaTime;
+                    if (gameOverTimer.current > controls.gameOverDelay) {
+                        drawGameOver(ctx, w, h, roomStateRef.current, socket?.id, gameOverTimer.current - controls.gameOverDelay);
+                    }
+                } else {
+                    gameOverTimer.current = 0;
+                    drawHUD(ctx, w, h, wind.current, roomStateRef.current, socket?.id, lastScore, scoreFlash);
+                    if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.005));
+                    if (shouldAutoFire.current) {
+                        shouldAutoFire.current = false; isAiming.current = false;
+                        socket?.emit('shoot', { aimPosition: reticlePos.current });
+                    }
+                }
             }
+
 
             animationFrameId = requestAnimationFrame(render);
         };
@@ -567,6 +583,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
         if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
+        // Explicitly block input if game is over
+        if (roomStateRef.current && roomStateRef.current.round > roomStateRef.current.maxRounds) return;
+
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -1259,9 +1278,17 @@ const drawHUD = (
         ctx.fillStyle = '#94a3b8';
         ctx.font = '12px Arial';
         ctx.fillText(`ROUND`, w / 2, 24);
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 24px Arial';
-        ctx.fillText(`${room.round} / ${room.maxRounds}`, w / 2, 50);
+        ctx.fillText(`ROUND`, w / 2, 24);
+
+        if (room.round === room.maxRounds) {
+            ctx.fillStyle = '#fbbf24'; // Gold for final round
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText('FINAL ROUND', w / 2, 48);
+        } else {
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 24px Arial';
+            ctx.fillText(`${room.round} / ${room.maxRounds}`, w / 2, 50);
+        }
 
         // Turn indicator
         if (isMyTurn) {
@@ -1410,6 +1437,104 @@ const drawHUD = (
     ctx.font = '13px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(isActive ? 'Tap & drag below to aim · Release to shoot' : 'Waiting for opponent...', w / 2, h - 20);
+};
+
+const drawGameOver = (ctx: CanvasRenderingContext2D, w: number, h: number, room: RoomState, myId: string | undefined, animTime: number) => {
+    // Animation progress (0 to 1 over 800ms)
+    const fadeProgress = Math.min(1, animTime / 800);
+    const slideProgress = Math.min(1, animTime / 600);
+    const easeOutBack = (t: number) => {
+        const c1 = 1.70158;
+        const c3 = c1 + 1;
+        return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    }
+    const slide = easeOutBack(slideProgress);
+
+    // Overlay fades in
+    ctx.save();
+    ctx.globalAlpha = fadeProgress;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    const me = room.players.find(p => p.id === myId);
+    const opponent = room.players.find(p => p.id !== myId);
+    const myScore = me?.score || 0;
+    const oppScore = opponent?.score || 0;
+
+    let title = 'GAME OVER';
+    let resultText = '';
+    let resultColor = '#fff';
+
+    if (myScore > oppScore) {
+        resultText = 'VICTORY';
+        resultColor = '#fbbf24'; // Gold
+    } else if (myScore < oppScore) {
+        resultText = 'DEFEAT';
+        resultColor = '#94a3b8'; // Grey
+    } else {
+        resultText = 'DRAW';
+        resultColor = '#fff';
+    }
+
+    const cx = w / 2;
+    const cy = h / 2;
+
+    ctx.save();
+    // Slide in logic
+    // Title starts higher and falls into place
+    const titleY = (cy - 120) - (1 - slide) * 50;
+
+    // Title
+    ctx.globalAlpha = fadeProgress;
+    ctx.font = 'bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText(title, cx, titleY);
+
+    // Result (Victory/Defeat) - Zooms in slightly
+    const scale = 0.5 + 0.5 * slide;
+    ctx.translate(cx, cy - 50);
+    ctx.scale(scale, scale);
+    ctx.font = 'bold 60px Arial';
+    ctx.fillStyle = resultColor;
+    ctx.shadowColor = resultColor;
+    ctx.shadowBlur = 20 * fadeProgress;
+    ctx.fillText(resultText, 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.scale(1 / scale, 1 / scale);
+    ctx.translate(-cx, -(cy - 50));
+
+    // Score
+    const scoreY = (cy + 20) + (1 - slide) * 30;
+    ctx.font = 'bold 30px Arial';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`${myScore} - ${oppScore}`, cx, scoreY);
+
+    ctx.font = '16px Arial';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('Final Score', cx, scoreY + 30);
+
+    // Button (Visual only) - Fades in last
+    if (animTime > 600) {
+        const btnFade = Math.min(1, (animTime - 600) / 400);
+        ctx.globalAlpha = btnFade;
+
+        const btnW = 200;
+        const btnH = 50;
+        const btnY = cy + 100;
+
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.roundRect(cx - btnW / 2, btnY, btnW, btnH, 25);
+        ctx.fill();
+
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 18px Arial';
+        ctx.fillText('PLAY AGAIN', cx, btnY + 32);
+    }
+
+    ctx.restore();
 };
 
 export default GameCanvas;

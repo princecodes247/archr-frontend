@@ -20,6 +20,7 @@ interface GameUIProps {
 
 const GameUI: React.FC<GameUIProps> = ({ room, playerId }) => {
     if (!room) return <div className="absolute top-4 left-4 text-white">Waiting for players...</div>;
+    if (room.round > room.maxRounds) return null;
 
     const isMyTurn = room.currentTurn === playerId;
     const opponent = room.players.find(p => p.id !== playerId);
