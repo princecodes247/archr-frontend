@@ -147,6 +147,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         hitPoint: Point;   // zoom focus (relative to target center)
     }>({ active: false, timer: 0, hitPoint: { x: 0, y: 0 } });
 
+    // Tutorial state
+    const hasInteracted = useRef(false);
+
     // React State for rendered overlays
     interface PinnedArrow { point: Point; playerIndex: number; }
     const [pinnedArrows, setPinnedArrows] = useState<PinnedArrow[]>([]);
@@ -569,6 +572,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
                         shouldAutoFire.current = false; isAiming.current = false;
                         socket?.emit('shoot', { aimPosition: reticlePos.current });
                     }
+
+                    // Tutorial overlay (Round 1 only, before interaction)
+                    if (roomStateRef.current.round === 1 && !hasInteracted.current && isMyTurn && !isAiming.current) {
+                        drawTutorial(ctx, w, h);
+                    }
                 }
             }
 
@@ -594,6 +602,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         if (y < window.innerHeight * 0.6) return;
 
         isAiming.current = true;
+        hasInteracted.current = true; // Dismiss tutorial
         aimTimer.current = 1.0;
         shouldAutoFire.current = false;
 
@@ -1437,6 +1446,45 @@ const drawHUD = (
     ctx.font = '13px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(isActive ? 'Tap & drag below to aim · Release to shoot' : 'Waiting for opponent...', w / 2, h - 20);
+};
+
+const drawTutorial = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
+    const cx = w / 2;
+    const cy = h * 0.75; // Center of drag zone
+
+    // Animate hand moving down
+    const time = performance.now();
+    const slide = (Math.sin(time * 0.005) + 1) / 2; // 0 to 1
+    const yOffset = slide * 40;
+
+    ctx.save();
+    ctx.translate(cx, cy + yOffset);
+
+    // Hand icon (simple shape)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 10;
+
+    // Finger
+    ctx.beginPath();
+    ctx.roundRect(-10, 0, 20, 30, 10);
+    ctx.fill();
+    // Circle indicator
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 20 + slide * 10, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.restore();
+
+    // Text
+    ctx.font = 'bold 20px Arial';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 4;
+    ctx.fillText("TAP & DRAG TO AIM", cx, cy - 40);
 };
 
 const drawGameOver = (ctx: CanvasRenderingContext2D, w: number, h: number, room: RoomState, myId: string | undefined, animTime: number) => {
