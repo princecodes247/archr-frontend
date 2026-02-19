@@ -43,6 +43,14 @@ export const useSocketStore = create<SocketState>((set, get) => ({
             set({ connected: false });
         });
 
+        // Solo timer updates
+        newSocket.on('timerUpdate', (data: { timeRemaining: number }) => {
+            const room = get().room;
+            if (room) {
+                set({ room: { ...room, timeRemaining: data.timeRemaining } });
+            }
+        });
+
         set({ socket: newSocket });
     },
 
