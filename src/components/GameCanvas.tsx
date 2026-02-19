@@ -1,28 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useControls, folder } from 'leva';
-import { Socket } from 'socket.io-client';
+import { useSocketStore } from '../stores/useSocketStore';
+import type { Room, Point } from '../types';
 
 interface GameCanvasProps {
-    socket: Socket | null;
-    isMyTurn: boolean;
-}
-
-interface Point {
-    x: number;
-    y: number;
-}
-
-interface Player {
-    id: string;
-    score: number;
-}
-
-interface RoomState {
-    players: Player[];
-    currentTurn: string;
-    round: number;
-    maxRounds: number;
-    wind: Point;
+    onExit: () => void;
 }
 
 // Player fletching color palettes
@@ -47,8 +29,10 @@ const FLETCHING_PALETTES: FletchingColors[] = [
     },
 ];
 
-const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
+const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const { socket, room, playerId } = useSocketStore();
+    const isMyTurn = room?.currentTurn === playerId;
 
     // ── Leva GUI Controls ──
     const controls = useControls({
@@ -153,21 +137,26 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
     // React State for rendered overlays
     interface PinnedArrow { point: Point; playerIndex: number; }
     const [pinnedArrows, setPinnedArrows] = useState<PinnedArrow[]>([]);
-    const roomStateRef = useRef<RoomState | null>(null);
+    const roomStateRef = useRef<Room | null>(room);
     const [lastScore, setLastScore] = useState<number | null>(null);
     const [scoreFlash, setScoreFlash] = useState(0);
     const pendingScore = useRef<number | null>(null);
 
+    // Sync room state from prop
+    useEffect(() => {
+        roomStateRef.current = room;
+        if (room?.wind) {
+            wind.current = room.wind;
+        }
+    }, [room]);
+
+    // Sync room state from prop
+    useEffect(() => {
+        roomStateRef.current = room;
+    }, [room]);
+
     useEffect(() => {
         if (!socket) return;
-
-        socket.on('gameState', (room: RoomState) => {
-            console.log('Game State:', room);
-            if (room.wind) {
-                wind.current = room.wind;
-            }
-            roomStateRef.current = room;
-        });
 
         socket.on('shotResult', (data: { player: string, path: Point[], score: number }) => {
             console.log('Shot Result:', data);
@@ -586,19 +575,36 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
 
         render();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [isMyTurn, pinnedArrows, roomStateRef.current, lastScore, scoreFlash]);
+    }, [isMyTurn, pinnedArrows, roomStateRef.current, lastScore]);
 
+    // ── Input Handlers ──
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
         if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
-        // Explicitly block input if game is over
-        if (roomStateRef.current && roomStateRef.current.round > roomStateRef.current.maxRounds) return;
+
+        // Explicitly block input if game is over (unless clicking Play Again)
+        if (roomStateRef.current && roomStateRef.current.round > roomStateRef.current.maxRounds) {
+            // Check collision with Play Again button
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const cx = w / 2;
+            const cy = h / 2;
+            const btnY = cy + 100;
+            const btnW = 200;
+            const btnH = 50;
+
+            // Check if click is inside button (simple box check)
+            if (x >= cx - btnW / 2 && x <= cx + btnW / 2 &&
+                y >= btnY && y <= btnY + btnH) {
+                onExit();
+            }
+            return;
+        }
 
         const canvas = canvasRef.current;
         if (!canvas) return;
 
         // Only allow aiming from the bottom 40% of the screen
-        // Use window height for consistent CSS pixel check
         if (y < window.innerHeight * 0.6) return;
 
         isAiming.current = true;
@@ -642,6 +648,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ socket, isMyTurn }) => {
         if (!isMyTurn || !isAiming.current) return;
         isAiming.current = false;
 
+        // Final shot
         socket?.emit('shoot', { aimPosition: reticlePos.current });
     };
 
@@ -1256,7 +1263,7 @@ const drawHUD = (
     ctx: CanvasRenderingContext2D,
     w: number, h: number,
     windVal: Point,
-    room: RoomState | null,
+    room: Room | null,
     myId: string | undefined,
     lastScore: number | null,
     scoreFlash: number
@@ -1487,7 +1494,7 @@ const drawTutorial = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
     ctx.fillText("TAP & DRAG TO AIM", cx, cy - 40);
 };
 
-const drawGameOver = (ctx: CanvasRenderingContext2D, w: number, h: number, room: RoomState, myId: string | undefined, animTime: number) => {
+const drawGameOver = (ctx: CanvasRenderingContext2D, w: number, h: number, room: Room, myId: string | undefined, animTime: number) => {
     // Animation progress (0 to 1 over 800ms)
     const fadeProgress = Math.min(1, animTime / 800);
     const slideProgress = Math.min(1, animTime / 600);
