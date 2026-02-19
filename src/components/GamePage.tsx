@@ -23,11 +23,9 @@ const GamePage: React.FC<GamePageProps> = ({ onExit }) => {
 
         if (!socket) return;
 
-        console.log('Joining game mode:', mode);
         socket.emit('joinGame', mode);
 
-        socket.on('gameState', (data: Room) => {
-            console.log('Game State Update:', data);
+        const handleGameState = (data: Room) => {
             setRoom(data);
 
             // If new game started, clear final score
@@ -42,10 +40,12 @@ const GamePage: React.FC<GamePageProps> = ({ onExit }) => {
                     setFinalScore(me.score);
                 }
             }
-        });
+        };
+
+        socket.on('gameState', handleGameState);
 
         return () => {
-            // Cleanup on unmount if needed
+            socket.off('gameState', handleGameState);
         };
     }, [mode, navigate, socket]);
 

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect } from 'react';
 import { useControls, folder } from 'leva';
 import { useSocketStore } from '../stores/useSocketStore';
 import type { Room, Point } from '../types';
@@ -67,6 +67,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             maxArrows: { value: 3, min: 1, max: 10, step: 1, label: 'Max Retained Arrows' },
         })
     });
+    // Store controls in a ref so the render loop always reads the latest
+    // without needing controls in any useEffect dependency array.
+    const controlsRef = useRef(controls);
+    controlsRef.current = controls;
 
     // Game State Refs (mutable, used in animation loop)
     const reticlePos = useRef<Point>({ x: 0, y: 0 });
@@ -136,13 +140,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
     // Tutorial state
     const hasInteracted = useRef(false);
 
-    // React State for rendered overlays
+    // Render-loop state (refs to avoid re-renders and animation loop re-initialization)
     interface PinnedArrow { point: Point; playerIndex: number; }
-    const [pinnedArrows, setPinnedArrows] = useState<PinnedArrow[]>([]);
+    const pinnedArrows = useRef<PinnedArrow[]>([]);
     const roomStateRef = useRef<Room | null>(room);
-    const [lastScore, setLastScore] = useState<number | null>(null);
-    const [scoreFlash, setScoreFlash] = useState(0);
+    const lastScore = useRef<number | null>(null);
+    const scoreFlash = useRef(0);
     const pendingScore = useRef<number | null>(null);
+    const isMyTurnRef = useRef(isMyTurn);
+    isMyTurnRef.current = isMyTurn;
 
     // Sync room state from prop
     useEffect(() => {
@@ -152,26 +158,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
         }
     }, [room]);
 
-    // Sync room state from prop
-    useEffect(() => {
-        roomStateRef.current = room;
-    }, [room]);
-
     useEffect(() => {
         if (!socket) return;
 
-        socket.on('shotResult', (data: { player: string, path: Point[], score: number }) => {
-            console.log('Shot Result:', data);
+        const handleShotResult = (data: { player: string, path: Point[], score: number }) => {
             const hitPt = data.path[0] || { x: 0, y: 0 };
 
             // Determine player index for fletching color
             const pIdx = roomStateRef.current?.players.findIndex(p => p.id === data.player) ?? 0;
-            console.log({ pIdx, roomStateRef, data })
+
             // Compute flight start/end in screen space (will be resolved in render)
             const f = arrowFlight.current;
             f.active = true;
             f.elapsed = 0;
-            f.duration = controls.flightDuration;
+            f.duration = controlsRef.current.flightDuration;
             f.hitPoint = hitPt;
             f.startX = 0; f.startY = 0; // Computed in render (needs canvas dims)
             f.endX = 0; f.endY = 0;
@@ -183,18 +183,21 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             f.flashFrames = 0;
             f.playerIndex = pIdx;
 
-            setPinnedArrows(prev => prev.slice(0)); // Keep existing arrows
             pendingScore.current = data.score; // Defer until arrow lands
 
             // Release camera zoom bump
             releaseZoomBump.current = 1.0;
-        });
+        };
+
+        socket.on('shotResult', handleShotResult);
 
         return () => {
-            socket.off('gameState');
-            socket.off('shotResult');
+            socket.off('shotResult', handleShotResult);
         };
     }, [socket]);
+
+    // Offscreen background cache (sky + ground + mowing lines + trees)
+    const bgCache = useRef<{ canvas: OffscreenCanvas; w: number; h: number } | null>(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -220,6 +223,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                 canvas.height = displayH * dpr;
                 canvas.style.width = displayW + 'px';
                 canvas.style.height = displayH + 'px';
+                bgCache.current = null; // Invalidate background cache on resize
             }
 
             // Always enforce scale every frame to prevent state drift
@@ -235,26 +239,26 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             // ── Physics Update ──
             // Additive Impulse Steering: Mouse movement imparts momentum change.
             // Momentum persists forever (no friction) and is clamped by Speed Bounds.
-            if (isMyTurn && isAiming.current) {
+            if (isMyTurnRef.current && isAiming.current) {
                 const m = momentum.current;
                 const buf = inputBuffer.current;
 
                 // 1. Apply drag input directly (screen-space deltas scaled by sensitivity)
-                m.x += buf.x * controls.dragSensitivity;
-                m.y += buf.y * controls.dragSensitivity;
+                m.x += buf.x * controlsRef.current.dragSensitivity;
+                m.y += buf.y * controlsRef.current.dragSensitivity;
 
                 // Clear buffer
                 buf.x = 0;
                 buf.y = 0;
 
                 // 2. Apply friction (momentum decays naturally)
-                m.x *= controls.friction;
-                m.y *= controls.friction;
+                m.x *= controlsRef.current.friction;
+                m.y *= controlsRef.current.friction;
 
                 // 3. Add gentle random drift so crosshair is never perfectly still
                 const driftAngle = performance.now() * 0.002;
-                m.x += Math.sin(driftAngle * 1.3) * controls.driftSpeed * 0.1;
-                m.y += Math.cos(driftAngle * 0.9) * controls.driftSpeed * 0.1;
+                m.x += Math.sin(driftAngle * 1.3) * controlsRef.current.driftSpeed * 0.1;
+                m.y += Math.cos(driftAngle * 0.9) * controlsRef.current.driftSpeed * 0.1;
 
                 // 4. Apply momentum to position
                 reticlePos.current.x += m.x;
@@ -270,7 +274,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                     reticlePos.current.y = (ry / dist) * maxR;
                 }
 
-            } else if (!isMyTurn) {
+            } else if (!isMyTurnRef.current) {
                 reticlePos.current = { x: 0, y: 0 };
                 momentum.current = { x: 0, y: 0 };
                 inputBuffer.current = { x: 0, y: 0 };
@@ -285,7 +289,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             let zoomFocusY = targetCenterY;
 
             if (psz.active) {
-                desiredZoom = controls.resultZoom;
+                desiredZoom = controlsRef.current.resultZoom;
                 zoomFocusX = targetCenterX + psz.hitPoint.x;
                 zoomFocusY = targetCenterY + psz.hitPoint.y;
                 psz.timer--;
@@ -297,12 +301,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                 const ft = arrowFlight.current.elapsed / arrowFlight.current.duration;
                 if (ft > 0.7) {
                     const zoomBlend = (ft - 0.7) / 0.3; // 0→1 over last 30%
-                    desiredZoom = 1.0 + (controls.resultZoom - 1.0) * zoomBlend;
+                    desiredZoom = 1.0 + (controlsRef.current.resultZoom - 1.0) * zoomBlend;
                     zoomFocusX = targetCenterX + arrowFlight.current.hitPoint.x;
                     zoomFocusY = targetCenterY + arrowFlight.current.hitPoint.y;
                 }
-            } else if (isMyTurn && isAiming.current) {
-                desiredZoom = controls.aimZoom;
+            } else if (isMyTurnRef.current && isAiming.current) {
+                desiredZoom = controlsRef.current.aimZoom;
             }
 
             // Release zoom bump (brief ~2% zoom on shot release)
@@ -322,32 +326,49 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             ctx.scale(zoom, zoom);
             ctx.translate(-zoomFocusX, -zoomFocusY);
 
-            // 1. Sky
-            const skyGradient = ctx.createLinearGradient(0, 0, 0, h * 0.6);
-            skyGradient.addColorStop(0, '#58a7e8');
-            skyGradient.addColorStop(1, '#a3d8f7');
-            ctx.fillStyle = skyGradient;
-            ctx.fillRect(-w, -h, w * 3, h * 3); // Over-draw for zoom
+            // 1. Static background (cached to offscreen canvas at DPR resolution)
+            if (!bgCache.current || bgCache.current.w !== w || bgCache.current.h !== h) {
+                const offscreen = new OffscreenCanvas(w * dpr, h * dpr);
+                const offCtx = offscreen.getContext('2d');
+                if (offCtx) {
+                    // Match main canvas DPR scaling
+                    offCtx.scale(dpr, dpr);
 
-            // 2. Ground
-            const groundGradient = ctx.createLinearGradient(0, horizonY, 0, h);
-            groundGradient.addColorStop(0, '#598c3e');
-            groundGradient.addColorStop(1, '#2f5a18');
-            ctx.fillStyle = groundGradient;
-            ctx.fillRect(-w, horizonY, w * 3, h * 2);
+                    // Sky
+                    const skyGradient = offCtx.createLinearGradient(0, 0, 0, h * 0.6);
+                    skyGradient.addColorStop(0, '#58a7e8');
+                    skyGradient.addColorStop(1, '#a3d8f7');
+                    offCtx.fillStyle = skyGradient;
+                    offCtx.fillRect(0, 0, w, h);
 
-            // Mowing lines
-            ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            for (let i = -20; i <= 20; i++) {
-                ctx.moveTo(centerX + i * 80, h);
-                ctx.lineTo(centerX + i * 2, horizonY);
+                    // Ground
+                    const groundGradient = offCtx.createLinearGradient(0, horizonY, 0, h);
+                    groundGradient.addColorStop(0, '#598c3e');
+                    groundGradient.addColorStop(1, '#2f5a18');
+                    offCtx.fillStyle = groundGradient;
+                    offCtx.fillRect(0, horizonY, w, h - horizonY);
+
+                    // Mowing lines
+                    offCtx.strokeStyle = 'rgba(255,255,255,0.06)';
+                    offCtx.lineWidth = 1;
+                    offCtx.beginPath();
+                    for (let i = -20; i <= 20; i++) {
+                        offCtx.moveTo(centerX + i * 80, h);
+                        offCtx.lineTo(centerX + i * 2, horizonY);
+                    }
+                    offCtx.stroke();
+
+                    // Trees
+                    drawTrees(offCtx as unknown as CanvasRenderingContext2D, w, horizonY);
+
+                    bgCache.current = { canvas: offscreen, w, h };
+                }
             }
-            ctx.stroke();
 
-            // Trees
-            drawTrees(ctx, w, horizonY);
+            if (bgCache.current) {
+                // Draw cached bg — source is DPR-scaled, dest is in CSS-pixel space (ctx already has dpr transform)
+                ctx.drawImage(bgCache.current.canvas, 0, 0, bgCache.current.canvas.width, bgCache.current.canvas.height, -w, -h, w * 3, h * 3);
+            }
 
             // 3. Target (with board shake offset)
             const shake = boardShake.current;
@@ -358,14 +379,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                 shake.decay *= 0.88; // Exponential decay
                 if (shake.decay < 0.01) shake.decay = 0;
             }
-            drawTarget(ctx, targetCenterX + shakeX, targetCenterY + shakeY, controls.targetScale);
+            drawTarget(ctx, targetCenterX + shakeX, targetCenterY + shakeY, controlsRef.current.targetScale);
 
             // Wind indicator above target
-            drawWindIndicator(ctx, targetCenterX + shakeX, targetCenterY + shakeY - 140 * controls.targetScale - 30, wind.current);
+            drawWindIndicator(ctx, targetCenterX + shakeX, targetCenterY + shakeY - 140 * controlsRef.current.targetScale - 30, wind.current);
 
             // 4. Pinned arrow (after flight completes)
-            if (pinnedArrows.length > 0) {
-                for (const pa of pinnedArrows) {
+            if (pinnedArrows.current.length > 0) {
+                for (const pa of pinnedArrows.current) {
                     drawPinnedArrow(ctx, targetCenterX + shakeX + pa.point.x, targetCenterY + shakeY + pa.point.y, 1.0, FLETCHING_PALETTES[pa.playerIndex % FLETCHING_PALETTES.length]);
                 }
             }
@@ -392,10 +413,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
 
                 if (impact.frame >= impact.totalFrames) {
                     impact.active = false;
-                    setPinnedArrows(prev => {
-                        const next = [...prev, { point: impact.hitPoint, playerIndex: impact.playerIndex }];
-                        return next.length > controls.maxArrows ? next.slice(next.length - controls.maxArrows) : next;
-                    });
+                    const next = [...pinnedArrows.current, { point: impact.hitPoint, playerIndex: impact.playerIndex }];
+                    pinnedArrows.current = next.length > controlsRef.current.maxArrows
+                        ? next.slice(next.length - controlsRef.current.maxArrows)
+                        : next;
                 }
             }
 
@@ -412,20 +433,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                     const dx = flight.endX - flight.startX;
                     const dy = flight.endY - flight.startY;
                     const dist = Math.sqrt(dx * dx + dy * dy);
-                    flight.arcHeight = dist * controls.arcHeightFactor;
+                    flight.arcHeight = dist * controlsRef.current.arcHeightFactor;
                 }
 
                 // Slow-mo for last portion of flight
                 const tNorm = flight.elapsed / flight.duration;
-                const speedMul = tNorm > controls.slowMoThreshold ? controls.slowMoSpeed : 1.0;
+                const speedMul = tNorm > controlsRef.current.slowMoThreshold ? controlsRef.current.slowMoSpeed : 1.0;
                 flight.elapsed += deltaTime * speedMul;
                 const t = Math.min(flight.elapsed / flight.duration, 1);
 
                 // ── Projectile position ──
                 // Linear interpolation + gravity arc + wind drift
                 const gravityArc = -4 * flight.arcHeight * t * (t - 1);
-                const windDriftX = flight.windX * controls.windDriftXFactor * t * t;
-                const windDriftY = flight.windY * controls.windDriftYFactor * t * t;
+                const windDriftX = flight.windX * controlsRef.current.windDriftXFactor * t * t;
+                const windDriftY = flight.windY * controlsRef.current.windDriftYFactor * t * t;
 
                 const ax = flight.startX + (flight.endX - flight.startX) * t + windDriftX;
                 const ay = flight.startY + (flight.endY - flight.startY) * t - gravityArc + windDriftY;
@@ -434,8 +455,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                 const dt2 = 0.02;
                 const t2 = Math.min(t + dt2, 1);
                 const gravArc2 = -4 * flight.arcHeight * t2 * (t2 - 1);
-                const wdx2 = flight.windX * controls.windDriftXFactor * t2 * t2;
-                const wdy2 = flight.windY * controls.windDriftYFactor * t2 * t2;
+                const wdx2 = flight.windX * controlsRef.current.windDriftXFactor * t2 * t2;
+                const wdy2 = flight.windY * controlsRef.current.windDriftYFactor * t2 * t2;
                 const ax2 = flight.startX + (flight.endX - flight.startX) * t2 + wdx2;
                 const ay2 = flight.startY + (flight.endY - flight.startY) * t2 - gravArc2 + wdy2;
                 let angle = Math.atan2(ay2 - ay, ax2 - ax);
@@ -507,12 +528,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                     // Solo: shorter hold for rapid-fire feel
                     const holdFrames = roomStateRef.current?.mode === 'solo'
                         ? Math.floor(60 * 0.8)
-                        : Math.floor(60 * controls.holdTime);
+                        : Math.floor(60 * controlsRef.current.holdTime);
                     postShotZoom.current = { active: true, timer: holdFrames, hitPoint: flight.hitPoint };
                     // Now show the score
                     if (pendingScore.current !== null) {
-                        setLastScore(pendingScore.current);
-                        setScoreFlash(1);
+                        lastScore.current = pendingScore.current;
+                        scoreFlash.current = 1;
                         pendingScore.current = null;
                     }
                 }
@@ -538,8 +559,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             }
 
             // 6. Reticle + Aim Timer
-            if (isMyTurn && isAiming.current) {
-                const totalFrames = controls.timerSeconds * 60;
+            if (isMyTurnRef.current && isAiming.current) {
+                const totalFrames = controlsRef.current.timerSeconds * 60;
                 aimTimer.current = Math.max(0, aimTimer.current - (1 / totalFrames));
                 if (aimTimer.current <= 0 && !shouldAutoFire.current) {
                     shouldAutoFire.current = true;
@@ -559,20 +580,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                     : roomStateRef.current.round > roomStateRef.current.maxRounds;
                 if (isGameOver) {
                     gameOverTimer.current += deltaTime;
-                    if (gameOverTimer.current > controls.gameOverDelay) {
-                        drawGameOver(ctx, w, h, roomStateRef.current, socket?.id, gameOverTimer.current - controls.gameOverDelay);
+                    if (gameOverTimer.current > controlsRef.current.gameOverDelay) {
+                        drawGameOver(ctx, w, h, roomStateRef.current, socket?.id, gameOverTimer.current - controlsRef.current.gameOverDelay);
                     }
                 } else {
                     gameOverTimer.current = 0;
-                    drawHUD(ctx, w, h, wind.current, roomStateRef.current, socket?.id, lastScore, scoreFlash);
-                    if (scoreFlash > 0) setScoreFlash(prev => Math.max(0, prev - 0.005));
+                    drawHUD(ctx, w, h, wind.current, roomStateRef.current, socket?.id, lastScore.current, scoreFlash.current);
+                    if (scoreFlash.current > 0) scoreFlash.current = Math.max(0, scoreFlash.current - 0.005);
                     if (shouldAutoFire.current) {
                         shouldAutoFire.current = false; isAiming.current = false;
                         socket?.emit('shoot', { aimPosition: reticlePos.current });
                     }
 
                     // Tutorial overlay (Round 1 only, before interaction)
-                    if (roomStateRef.current.round === 1 && !hasInteracted.current && isMyTurn && !isAiming.current) {
+                    if (roomStateRef.current.round === 1 && !hasInteracted.current && isMyTurnRef.current && !isAiming.current) {
                         drawTutorial(ctx, w, h);
                     }
                 }
@@ -584,9 +605,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
 
         render();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [isMyTurn, pinnedArrows, roomStateRef.current, lastScore]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-    // ── Input Handlers ──
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
         if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
@@ -643,7 +664,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
         inputBuffer.current = { x: 0, y: 0 };
         momentum.current = { x: 0, y: 0 };
 
-        setLastScore(null);
+        lastScore.current = null;
     };
 
     const handleMove = (x: number, y: number) => {
@@ -823,11 +844,12 @@ const drawTarget = (ctx: CanvasRenderingContext2D, x: number, y: number, scale: 
     // ── White backing (target paper) ──
     ctx.fillStyle = '#f0ece4';
     ctx.fillRect(-bs, -bs, bs * 2, bs * 2);
-    // Subtle paper texture
+    // Subtle paper texture (deterministic — no flicker)
     ctx.fillStyle = 'rgba(0,0,0,0.02)';
     for (let ty = -bs; ty < bs; ty += 4) {
         for (let tx = -bs; tx < bs; tx += 4) {
-            if (Math.random() > 0.5) ctx.fillRect(tx, ty, 4, 4);
+            // Simple hash for deterministic noise
+            if (((tx * 73 + ty * 137) & 0xff) > 128) ctx.fillRect(tx, ty, 4, 4);
         }
     }
 
@@ -953,204 +975,99 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
     ctx.save();
     ctx.translate(x, y);
 
-    // Deterministic tilt from hit position (5°–7° unique angle per arrow)
+    // Deterministic tilt from hit position
     const seed = Math.abs(x * 73.13 + y * 91.17) % 360;
-    const tiltAngle = ((seed / 360) * 0.24 - 0.12); // ±7° — subtle, fired not placed
+    const tiltAngle = ((seed / 360) * 0.24 - 0.12);
     ctx.rotate(tiltAngle);
 
-    // ── Proportions (refined: thinner shaft, smaller vanes) ──
     const shaftLen = 28;
-    const shaftR1 = 1.3;   // Slim shaft (matches ferrule inner radius)
-    const shaftR2 = 1.3;   // Same width — straight cylinder, no taper
+    const shaftR1 = 1.3;
+    const shaftR2 = 1.3;
 
-    // ── 1. Arrow-shaped shadow (traces silhouette, offset for depth) ──
-    const shadowOx = 4;   // Shadow offset X (light from upper-left)
-    const shadowOy = 5;   // Shadow offset Y
+    // ── 1. Shadow — layered ellipses (no blur filter!) ──
+    const shadowOx = 4;
+    const shadowOy = 5;
     ctx.save();
-    ctx.globalAlpha = 0.18 * animProgress;
-    ctx.fillStyle = '#000';
-    ctx.filter = 'blur(3px)';
-    ctx.beginPath();
-    // Broadhead blades (bottom)
-    ctx.moveTo(shadowOx - 5, shadowOy + 3);
-    ctx.lineTo(shadowOx, shadowOy - 2);
-    ctx.lineTo(shadowOx + 5, shadowOy + 3);
-    // Shaft right edge (going up)
-    ctx.lineTo(shadowOx + shaftR1, shadowOy);
-    ctx.lineTo(shadowOx + shaftR2, shadowOy - shaftLen);
-    // Right fletching wing
-    ctx.lineTo(shadowOx + 14, shadowOy - shaftLen - 18);
-    ctx.lineTo(shadowOx + 0, shadowOy - shaftLen - 18 * 0.7);
-    // Left fletching wing
-    ctx.lineTo(shadowOx - 14, shadowOy - shaftLen - 18);
-    ctx.lineTo(shadowOx - shaftR2, shadowOy - shaftLen);
-    // Shaft left edge (going back down)
-    ctx.lineTo(shadowOx - shaftR1, shadowOy);
-    ctx.closePath();
-    ctx.fill();
-    ctx.filter = 'none';
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.globalAlpha = animProgress;
+    ctx.beginPath(); ctx.ellipse(shadowOx, shadowOy - shaftLen / 2, 10, shaftLen * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.beginPath(); ctx.ellipse(shadowOx, shadowOy - shaftLen / 2, 6, shaftLen * 0.45, 0, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
-    // // ── 2. Board indentation circle (1-2px pressed-in ring) ──
-    // ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
-    // ctx.lineWidth = 1.5;
-    // ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.stroke();
-
-    // // Inner dark hole
-    // ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-    // ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, Math.PI * 2); ctx.fill();
-
-    // Pushed-out rim (lighter)
+    // Pushed-out rim
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
     ctx.lineWidth = 0.7;
     ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.stroke();
 
-    // ── 3. Broadhead tip (viewed from behind — ferrule + 3 blades) ──
-    // Ferrule (cylindrical base that connects to shaft)
+    // ── 2. Broadhead — flat colors (no per-frame gradients) ──
     const ferruleR = 2.2;
-    const ferruleGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, ferruleR + 1);
-    ferruleGrad.addColorStop(0, '#bbb');
-    ferruleGrad.addColorStop(0.4, '#999');
-    ferruleGrad.addColorStop(0.8, '#777');
-    ferruleGrad.addColorStop(1, '#555');
-    ctx.fillStyle = ferruleGrad;
+    ctx.fillStyle = '#999';
     ctx.beginPath(); ctx.arc(0, 0, ferruleR, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,0.3)';
     ctx.lineWidth = 0.6;
     ctx.stroke();
 
-    // 3 Blade edges radiating from ferrule (120° apart)
+    // 3 Blade edges (flat fills)
     const bladeLen = 6;
     const bladeW = 1.8;
+    ctx.fillStyle = '#ccc';
     for (let b = 0; b < 3; b++) {
         const bAngle = (b * 120 - 60) * (Math.PI / 180);
         const bTipX = Math.cos(bAngle) * bladeLen;
         const bTipY = Math.sin(bAngle) * bladeLen;
         const bPerpX = -Math.sin(bAngle) * bladeW * 0.5;
         const bPerpY = Math.cos(bAngle) * bladeW * 0.5;
-
-        // Blade shape (tapered razor edge)
-        const bladeGrad = ctx.createLinearGradient(0, 0, bTipX, bTipY);
-        bladeGrad.addColorStop(0, '#aaa');
-        bladeGrad.addColorStop(0.3, '#d0d0d0');
-        bladeGrad.addColorStop(0.6, '#e8e8e8'); // Razor edge glint
-        bladeGrad.addColorStop(1, '#888');
-        ctx.fillStyle = bladeGrad;
         ctx.beginPath();
         ctx.moveTo(bPerpX * 0.6, bPerpY * 0.6);
         ctx.lineTo(bTipX, bTipY);
         ctx.lineTo(-bPerpX * 0.6, -bPerpY * 0.6);
         ctx.closePath();
         ctx.fill();
-        // Blade edge highlight
-        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-        ctx.lineWidth = 0.4;
-        ctx.beginPath();
-        ctx.moveTo(bPerpX * 0.3, bPerpY * 0.3);
-        ctx.lineTo(bTipX * 0.9, bTipY * 0.9);
-        ctx.stroke();
     }
 
-    // Center specular highlight on ferrule
+    // Ferrule highlight
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.beginPath(); ctx.arc(-0.3, -0.5, 0.8, 0, Math.PI * 2); ctx.fill();
 
-    // ── 4. Shaft (slim carbon tube, black at bottom → dark gray at top) ──
-    const shaftGradV = ctx.createLinearGradient(0, 0, 0, -shaftLen);
-    shaftGradV.addColorStop(0, '#111');       // Black at ferrule end
-    shaftGradV.addColorStop(0.15, '#222');     // Near-black
-    shaftGradV.addColorStop(0.4, '#3a3a3a');   // Dark gray
-    shaftGradV.addColorStop(0.7, '#4a4a4a');   // Mid gray
-    shaftGradV.addColorStop(1, '#444');         // Slightly lighter at back
-    // Horizontal highlight (cylindrical sheen)
-    const shaftGradH = ctx.createLinearGradient(-shaftR1 - 0.5, 0, shaftR1 + 0.5, 0);
-    shaftGradH.addColorStop(0, 'rgba(0,0,0,0.4)');
-    shaftGradH.addColorStop(0.35, 'rgba(255,255,255,0.05)');
-    shaftGradH.addColorStop(0.5, 'rgba(255,255,255,0.12)');
-    shaftGradH.addColorStop(0.65, 'rgba(255,255,255,0.03)');
-    shaftGradH.addColorStop(1, 'rgba(0,0,0,0.3)');
-
-    // Draw shaft body (starts flush with ferrule)
-    ctx.fillStyle = shaftGradV;
+    // ── 3. Shaft — single flat fill (gradient invisible at 3px width) ──
+    ctx.fillStyle = '#333';
     ctx.beginPath();
-    ctx.moveTo(-shaftR1, 0);       // Starts at ferrule center
+    ctx.moveTo(-shaftR1, 0);
     ctx.lineTo(-shaftR2, -shaftLen);
     ctx.lineTo(shaftR2, -shaftLen);
     ctx.lineTo(shaftR1, 0);
     ctx.closePath();
     ctx.fill();
-    // Overlay horizontal highlight
-    ctx.fillStyle = shaftGradH;
-    ctx.fill();
 
-    // Subtle texture lines (carbon weave)
-    ctx.save();
-    ctx.globalAlpha = 0.06;
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 0.4;
-    for (let i = 0; i < shaftLen; i += 4) {
-        const frac = i / shaftLen;
-        const w = shaftR1 + (shaftR2 - shaftR1) * frac;
-        const yy = -1 - i;
-        ctx.beginPath(); ctx.moveTo(-w, yy); ctx.lineTo(w, yy - 1.5); ctx.stroke();
-    }
-    ctx.restore();
-
-    // ── 5. Pin wrap / binding (where vanes attach to shaft) ──
+    // ── 4. Pin wrap ──
     const wrapY = -shaftLen + 1;
-    const wrapGrad = ctx.createLinearGradient(-shaftR2, 0, shaftR2, 0);
-    wrapGrad.addColorStop(0, '#146614');
-    wrapGrad.addColorStop(0.3, '#22aa22');
-    wrapGrad.addColorStop(0.5, '#33cc33');
-    wrapGrad.addColorStop(0.7, '#22aa22');
-    wrapGrad.addColorStop(1, '#146614');
-    ctx.fillStyle = wrapGrad;
+    ctx.fillStyle = '#22aa22';
     ctx.fillRect(-shaftR2 - 0.3, wrapY, (shaftR2 + 0.3) * 2, 3);
-    // Wrap thread lines
-    ctx.strokeStyle = 'rgba(0,80,0,0.3)';
-    ctx.lineWidth = 0.4;
-    for (let wy = wrapY; wy < wrapY + 3; wy += 1) {
-        ctx.beginPath(); ctx.moveTo(-shaftR2, wy); ctx.lineTo(shaftR2, wy); ctx.stroke();
-    }
 
-    // ── 6. Fletching — two triangular vanes in V-shape ──
-    // Vanes attach at wrap and splay AWAY from target (negative Y = up on screen)
-    const vaneBaseY = -shaftLen;     // Wrap/attach point
-    const fLen = 18;                  // How far vanes extend
-    const fSpread = 14;              // Lateral splay
+    // ── 5. Fletching — two vanes ──
+    const vaneBaseY = -shaftLen;
+    const fLen = 18;
+    const fSpread = 14;
 
     for (const d of [-1, 1]) {
-        ctx.save();
-
-        // Attachment point at wrap (on shaft)
         const attachX = d * 1;
-        const attachY = vaneBaseY + 2;          // Just below wrap, on shaft
-        // Wing tip: outward and AWAY from target (more negative Y)
+        const attachY = vaneBaseY + 2;
         const tipX = d * fSpread;
-        const tipY = vaneBaseY - fLen;            // Away from target
-        // Inner point back near shaft
+        const tipY = vaneBaseY - fLen;
         const innerX = 0;
         const innerY = vaneBaseY - fLen * 0.7;
 
-        // Main vane face
-        const vGrad = ctx.createLinearGradient(attachX, attachY, tipX, tipY);
-        vGrad.addColorStop(0, colors.grad[0]);
-        vGrad.addColorStop(0.4, colors.grad[1]);
-        vGrad.addColorStop(0.7, colors.grad[2]);
-        vGrad.addColorStop(1, colors.grad[3]);
-        ctx.fillStyle = vGrad;
-
+        // Main vane — use base fletching color (flat)
+        ctx.fillStyle = colors.grad[0];
         ctx.beginPath();
         ctx.moveTo(attachX, attachY);
-        ctx.quadraticCurveTo(
-            d * fSpread * 0.5, vaneBaseY - fLen * 0.4,
-            tipX, tipY
-        );
+        ctx.quadraticCurveTo(d * fSpread * 0.5, vaneBaseY - fLen * 0.4, tipX, tipY);
         ctx.lineTo(innerX, innerY);
         ctx.closePath();
         ctx.fill();
 
-        // Inner face (darker — depth)
+        // Inner face
         ctx.fillStyle = colors.inner;
         ctx.beginPath();
         ctx.moveTo(attachX, attachY);
@@ -1164,46 +1081,18 @@ const drawPinnedArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, an
         ctx.lineWidth = 0.6;
         ctx.beginPath();
         ctx.moveTo(attachX, attachY);
-        ctx.quadraticCurveTo(
-            d * fSpread * 0.5, vaneBaseY - fLen * 0.4,
-            tipX, tipY
-        );
+        ctx.quadraticCurveTo(d * fSpread * 0.5, vaneBaseY - fLen * 0.4, tipX, tipY);
         ctx.lineTo(innerX, innerY);
         ctx.closePath();
         ctx.stroke();
-
-        // Highlight streak
-        ctx.strokeStyle = colors.highlight;
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.moveTo(d * 1.5, attachY - 2);
-        ctx.quadraticCurveTo(
-            d * fSpread * 0.35, vaneBaseY - fLen * 0.3,
-            tipX * 0.7, tipY
-        );
-        ctx.stroke();
-
-        ctx.restore();
     }
 
-    // ── 7. Nock (above fletching tips) ──
+    // ── 6. Nock — flat ──
     const nockY = vaneBaseY - fLen * 0.7 - 2;
-    const nockGrad = ctx.createRadialGradient(0, nockY, 0, 0, nockY, 3);
-    nockGrad.addColorStop(0, '#f0f0f0');
-    nockGrad.addColorStop(0.5, '#ddd');
-    nockGrad.addColorStop(1, '#aaa');
-    ctx.fillStyle = nockGrad;
+    ctx.fillStyle = '#ddd';
     ctx.beginPath(); ctx.arc(0, nockY, 2.5, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,0.2)';
     ctx.lineWidth = 0.5;
-    ctx.stroke();
-    // String groove
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(-1.8, nockY + 0.5);
-    ctx.lineTo(0, nockY - 1.5);
-    ctx.lineTo(1.8, nockY + 0.5);
     ctx.stroke();
 
     ctx.restore();
