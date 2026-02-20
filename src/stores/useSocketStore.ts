@@ -5,11 +5,13 @@ import type { Room } from '../types';
 // const SOCKET_URL = 'http://192.168.1.184:3000';
 const SOCKET_URL = 'http://localhost:3000';
 
+const STORAGE_KEY = 'archr_userId';
+
 interface SocketState {
     socket: Socket | null;
     connected: boolean;
     room: Room | null;
-    playerId: string | undefined;
+    playerId: string | undefined;   // userId (persistent)
     finalScore: number | null;
 
     // Actions
@@ -35,7 +37,23 @@ export const useSocketStore = create<SocketState>((set, get) => ({
 
         newSocket.on('connect', () => {
             console.log('Socket connected:', newSocket.id);
-            set({ connected: true, playerId: newSocket.id });
+
+            // Send stored userId (or nothing) for registration
+            const storedUserId = localStorage.getItem(STORAGE_KEY) || undefined;
+
+            newSocket.emit('register', { userId: storedUserId }, (response: { userId: string }) => {
+                // Callback-based acknowledgment
+                console.log('Registered with userId:', response.userId);
+                localStorage.setItem(STORAGE_KEY, response.userId);
+                set({ connected: true, playerId: response.userId });
+            });
+
+            // Fallback: if server uses emit instead of callback
+            newSocket.on('registered', (data: { userId: string }) => {
+                console.log('Registered (event) with userId:', data.userId);
+                localStorage.setItem(STORAGE_KEY, data.userId);
+                set({ connected: true, playerId: data.userId });
+            });
         });
 
         newSocket.on('disconnect', () => {

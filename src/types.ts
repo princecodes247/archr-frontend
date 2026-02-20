@@ -4,7 +4,8 @@ export interface Point {
 }
 
 export interface Player {
-    id: string;
+    id: string;       // socket.id (ephemeral)
+    userId: string;   // persistent user ID
     score: number;
 }
 
@@ -12,7 +13,7 @@ export interface Room {
     id: string;
     mode: 'solo' | 'multiplayer';
     players: Player[];
-    currentTurn: string;
+    currentTurn: string;   // userId of current player
     round: number;
     maxRounds: number;
     wind: Point;

@@ -16,7 +16,7 @@ const GameUI: React.FC<GameUIProps> = ({ room, playerId }) => {
         : room.round > room.maxRounds;
     if (isGameOver) return null;
 
-    const me = room.players.find(p => p.id === playerId);
+    const me = room.players.find(p => p.userId === playerId);
 
     if (room.mode === 'solo') {
         const timeLeft = Math.ceil(room.timeRemaining);
@@ -53,7 +53,7 @@ const GameUI: React.FC<GameUIProps> = ({ room, playerId }) => {
 
     // ── Multiplayer UI ──
     const isMyTurn = room.currentTurn === playerId;
-    const opponent = room.players.find(p => p.id !== playerId);
+    const opponent = room.players.find(p => p.userId !== playerId);
 
     return (
         <div className="game-hud">

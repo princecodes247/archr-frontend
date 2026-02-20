@@ -123,7 +123,7 @@ const AccuracyRing: React.FC<{ score: number; color: string; glow: string; accur
 };
 
 const GameOver: React.FC<GameOverProps> = ({ room, playerId, onPlayAgain }) => {
-    const me = room.players.find(p => p.id === playerId);
+    const me = room.players.find(p => p.userId === playerId);
     const myScore = me?.score || 0;
 
     if (room.mode === 'solo') {
@@ -174,7 +174,7 @@ const GameOver: React.FC<GameOverProps> = ({ room, playerId, onPlayAgain }) => {
     }
 
     // ── Multiplayer ──
-    const opponent = room.players.find(p => p.id !== playerId);
+    const opponent = room.players.find(p => p.userId !== playerId);
     const oppScore = opponent?.score || 0;
 
     let resultText: string;

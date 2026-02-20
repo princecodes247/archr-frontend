@@ -166,7 +166,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             const hitPt = data.path[0] || { x: 0, y: 0 };
 
             // Determine player index for fletching color
-            const pIdx = roomStateRef.current?.players.findIndex(p => p.id === data.player) ?? 0;
+            const pIdx = roomStateRef.current?.players.findIndex(p => p.userId === data.player) ?? 0;
 
             // Compute flight start/end in screen space (will be resolved in render)
             const f = arrowFlight.current;
@@ -603,7 +603,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
                     }
                 } else {
                     gameOverTimer.current = 0;
-                    drawHUD(ctx, w, h, wind.current, roomStateRef.current, socket?.id, lastScore.current, scoreFlash.current);
+                    drawHUD(ctx, w, h, wind.current, roomStateRef.current, playerId, lastScore.current, scoreFlash.current);
                     if (scoreFlash.current > 0) scoreFlash.current = Math.max(0, scoreFlash.current - 0.005);
                     if (shouldAutoFire.current) {
                         shouldAutoFire.current = false; isAiming.current = false;

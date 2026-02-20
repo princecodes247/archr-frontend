@@ -22,15 +22,17 @@ const GamePage: React.FC<GamePageProps> = ({ onExit }) => {
             return;
         }
 
-        if (!socket) return;
+        if (!socket || !playerId) return;
 
         socket.emit('joinGame', mode);
 
         const handleGameState = (data: Room) => {
             setRoom(data);
 
+            const userId = useSocketStore.getState().playerId;
+
             // If new game started, clear final score
-            if (data.round === 1 && data.players.find(p => p.id === socket.id)?.score === 0) {
+            if (data.round === 1 && data.players.find(p => p.userId === userId)?.score === 0) {
                 setFinalScore(null);
             }
 
@@ -38,7 +40,7 @@ const GamePage: React.FC<GamePageProps> = ({ onExit }) => {
             const isSoloOver = data.mode === 'solo' && data.timeRemaining <= 0;
             const isMultiOver = data.round > data.maxRounds;
             if (isSoloOver || isMultiOver) {
-                const me = data.players.find(p => p.id === socket.id);
+                const me = data.players.find(p => p.userId === userId);
                 if (me) {
                     setFinalScore(me.score);
                 }
@@ -50,7 +52,7 @@ const GamePage: React.FC<GamePageProps> = ({ onExit }) => {
         return () => {
             socket.off('gameState', handleGameState);
         };
-    }, [mode, navigate, socket]);
+    }, [mode, navigate, socket, playerId]);
 
     const handleGameExit = () => {
         onExit();
