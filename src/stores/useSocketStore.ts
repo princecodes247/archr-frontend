@@ -3,7 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import type { Room } from '../types';
 
 // const SOCKET_URL = 'http://192.168.1.184:3000';
-const SOCKET_URL = 'http://localhost:3000';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
 
 const STORAGE_KEY = 'archr_userId';
 
