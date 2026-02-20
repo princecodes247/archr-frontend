@@ -610,9 +610,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
 
     // ── Input Handlers ──
     const handleStart = (x: number, y: number) => {
-        if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
-
-        // Explicitly block input if game is over (unless clicking Play Again)
+        // Check for game-over Play Again button FIRST (before turn guard)
         const isGameOver = roomStateRef.current && (
             roomStateRef.current.mode === 'solo'
                 ? roomStateRef.current.timeRemaining <= 0
@@ -637,6 +635,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
             }
             return;
         }
+
+        if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
 
         const canvas = canvasRef.current;
         if (!canvas) return;

@@ -34,7 +34,9 @@ const GamePage: React.FC<GamePageProps> = ({ onExit }) => {
             }
 
             // Check for Game Over to trigger leaderboard submission flow
-            if (data.round > data.maxRounds) {
+            const isSoloOver = data.mode === 'solo' && data.timeRemaining <= 0;
+            const isMultiOver = data.round > data.maxRounds;
+            if (isSoloOver || isMultiOver) {
                 const me = data.players.find(p => p.id === socket.id);
                 if (me) {
                     setFinalScore(me.score);
