@@ -1,0 +1,158 @@
+/* ── Connecting Page Design ── */
+
+.connecting-page {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    color: #f0ece4;
+    user-select: none;
+    z-index: 1000;
+    
+    background:
+        radial-gradient(ellipse 80% 60% at 30% 40%, rgba(58, 124, 74, 0.12) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 50% at 70% 60%, rgba(201, 168, 76, 0.06) 0%, transparent 60%),
+        linear-gradient(175deg, #0d1f12 0%, #060e08 40%, #0a0a08 100%);
+}
+
+/* Grain noise overlay */
+.connecting-page::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-size: 200px 200px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.connecting-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+    animation: connectReveal 1s ease-out;
+}
+
+@keyframes connectReveal {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Logo ── */
+.connecting-logo {
+    text-align: center;
+}
+
+.connecting-title {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 64px;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: #f0ece4;
+    margin: 0;
+    position: relative;
+}
+
+/* Gold shimmer */
+.connecting-title::after {
+    content: 'ARCHR';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        105deg,
+        transparent 40%,
+        rgba(201, 168, 76, 0.35) 45%,
+        rgba(201, 168, 76, 0.5) 50%,
+        rgba(201, 168, 76, 0.35) 55%,
+        transparent 60%
+    );
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 4s ease-in-out infinite;
+}
+
+.connecting-subtitle {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5em;
+    color: #c9a84c;
+    margin-top: 8px;
+    opacity: 0.6;
+    text-transform: uppercase;
+}
+
+/* ── Target Loader ── */
+.target-loader {
+    position: relative;
+    width: 60px;
+    height: 60px;
+}
+
+.target-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid transparent;
+}
+
+.target-ring-outer {
+    border-color: rgba(201, 168, 76, 0.2);
+    animation: rotateTarget 4s linear infinite;
+}
+
+.target-ring-inner {
+    inset: 10px;
+    border-color: rgba(58, 124, 74, 0.4);
+    animation: rotateTarget 2.5s linear infinite reverse;
+}
+
+.target-center {
+    position: absolute;
+    inset: 22px;
+    background: #c9a84c;
+    border-radius: 50%;
+    box-shadow: 0 0 15px rgba(201, 168, 76, 0.4);
+    animation: pulseTarget 1.5s ease-in-out infinite;
+}
+
+@keyframes rotateTarget {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes pulseTarget {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.2); opacity: 1; }
+}
+
+/* ── Status Text ── */
+.connecting-status {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: rgba(240, 236, 228, 0.4);
+    text-transform: uppercase;
+}
+
+.connecting-status span {
+    display: inline-block;
+    animation: dotPulse 1.4s infinite;
+}
+
+.connecting-status span:nth-child(2) { animation-delay: 0.2s; }
+.connecting-status span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dotPulse {
+    0%, 100% { opacity: 0.3; transform: translateY(0); }
+    50% { opacity: 1; transform: translateY(-1px); }
+}

@@ -39,10 +39,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
 
     // ── Leva GUI Controls ──
     const controls = useControls({
-        'Drift Physics': folder({
-            dragSensitivity: { value: 0.5, min: 0.1, max: 2.0, step: 0.05, label: 'Drag Sensitivity' },
-            friction: { value: 0.85, min: 0.5, max: 0.99, step: 0.01, label: 'Friction' },
-            driftSpeed: { value: 0.3, min: 0.0, max: 2.0, step: 0.1, label: 'Random Drift' },
+        'Aiming Feel': folder({
+            smoothing: { value: 0.35, min: 0.05, max: 1.0, step: 0.05, label: 'Smoothing' },
+            sensitivity: { value: 1.0, min: 0.2, max: 3.0, step: 0.1, label: 'Sensitivity' },
         }),
         'Aiming': folder({
             timerSeconds: { value: 5.0, min: 1.0, max: 15.0, step: 0.5, label: 'Timer (s)' },
@@ -76,8 +75,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
 
     // Game State Refs (mutable, used in animation loop)
     const reticlePos = useRef<Point>({ x: 0, y: 0 });
-    const momentum = useRef<Point>({ x: 0, y: 0 });    // Freedrift velocity
-    const inputBuffer = useRef<Point>({ x: 0, y: 0 }); // Accumulated mouse delta since last frame
+    const inputTarget = useRef<Point>({ x: 0, y: 0 });  // Raw accumulated input position
     const lastInputPos = useRef<Point | null>(null);
     const wind = useRef<Point>({ x: 0, y: 0 });
     const isAiming = useRef(false);
@@ -239,48 +237,26 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             const targetCenterX = centerX;
             const targetCenterY = horizonY + 80;
 
-            // ── Physics Update ──
-            // Additive Impulse Steering: Mouse movement imparts momentum change.
-            // Momentum persists forever (no friction) and is clamped by Speed Bounds.
+            // ── Reticle Update (smooth follow) ──
             if (isMyTurnRef.current && isAiming.current) {
-                const m = momentum.current;
-                const buf = inputBuffer.current;
+                const s = controlsRef.current.smoothing;
+                const pos = reticlePos.current;
+                const target = inputTarget.current;
 
-                // 1. Apply drag input directly (screen-space deltas scaled by sensitivity)
-                m.x += buf.x * controlsRef.current.dragSensitivity;
-                m.y += buf.y * controlsRef.current.dragSensitivity;
+                // Lerp toward input target for fluid motion
+                pos.x += (target.x - pos.x) * s;
+                pos.y += (target.y - pos.y) * s;
 
-                // Clear buffer
-                buf.x = 0;
-                buf.y = 0;
-
-                // 2. Apply friction (momentum decays naturally)
-                m.x *= controlsRef.current.friction;
-                m.y *= controlsRef.current.friction;
-
-                // 3. Add gentle random drift so crosshair is never perfectly still
-                const driftAngle = performance.now() * 0.002;
-                m.x += Math.sin(driftAngle * 1.3) * controlsRef.current.driftSpeed * 0.1;
-                m.y += Math.cos(driftAngle * 0.9) * controlsRef.current.driftSpeed * 0.1;
-
-                // 4. Apply momentum to position
-                reticlePos.current.x += m.x;
-                reticlePos.current.y += m.y;
-
-                // 5. Clamp to target area (keep within ~150px of center)
+                // Clamp to target area
                 const maxR = 160;
-                const rx = reticlePos.current.x;
-                const ry = reticlePos.current.y;
-                const dist = Math.sqrt(rx * rx + ry * ry);
+                const dist = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
                 if (dist > maxR) {
-                    reticlePos.current.x = (rx / dist) * maxR;
-                    reticlePos.current.y = (ry / dist) * maxR;
+                    pos.x = (pos.x / dist) * maxR;
+                    pos.y = (pos.y / dist) * maxR;
                 }
-
             } else if (!isMyTurnRef.current) {
                 reticlePos.current = { x: 0, y: 0 };
-                momentum.current = { x: 0, y: 0 };
-                inputBuffer.current = { x: 0, y: 0 };
+                inputTarget.current = { x: 0, y: 0 };
                 lastInputPos.current = null;
             }
 
@@ -639,10 +615,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
                 ? roomStateRef.current.timeRemaining <= 0
                 : roomStateRef.current.round > roomStateRef.current.maxRounds
         );
-        if (isGameOver) {
-            // Game over UI is now handled by React overlay
-            return;
-        }
+        if (isGameOver) return;
 
         if (!isMyTurn || postShotZoom.current.active || arrowFlight.current.active) return;
 
@@ -653,38 +626,35 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
         if (y < window.innerHeight * 0.6) return;
 
         isAiming.current = true;
-        hasInteracted.current = true; // Dismiss tutorial
+        hasInteracted.current = true;
         playAim();
         aimTimer.current = 1.0;
         shouldAutoFire.current = false;
 
-        // Random start position: one of 6 spots around the target edge
-        // Note: Reticle position is in CSS pixels relative to target center
+        // Random start position around the target edge
         const targetRadius = 100;
         const slotIndex = Math.floor(Math.random() * 6);
         const spawnAngle = (slotIndex / 6) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
-        reticlePos.current = {
+        const startPos = {
             x: Math.cos(spawnAngle) * targetRadius * (0.6 + Math.random() * 0.4),
             y: Math.sin(spawnAngle) * targetRadius * (0.6 + Math.random() * 0.4)
         };
+        reticlePos.current = { ...startPos };
+        inputTarget.current = { ...startPos };
 
-        // Track raw screen position for delta calculation
         lastInputPos.current = { x, y };
-        inputBuffer.current = { x: 0, y: 0 };
-        momentum.current = { x: 0, y: 0 };
-
         lastScore.current = null;
     };
 
     const handleMove = (x: number, y: number) => {
         if (!isMyTurn || !isAiming.current) return;
 
-        // Use raw screen-space deltas (not world-space) for predictable control
         if (lastInputPos.current) {
             const dx = x - lastInputPos.current.x;
             const dy = y - lastInputPos.current.y;
-            inputBuffer.current.x += dx;
-            inputBuffer.current.y += dy;
+            const sens = controlsRef.current.sensitivity;
+            inputTarget.current.x += dx * sens;
+            inputTarget.current.y += dy * sens;
         }
 
         lastInputPos.current = { x, y };
@@ -693,8 +663,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
     const handleEnd = () => {
         if (!isMyTurn || !isAiming.current) return;
         isAiming.current = false;
-
-        // Final shot
         playRelease();
         socket?.emit('shoot', { aimPosition: reticlePos.current });
     };
