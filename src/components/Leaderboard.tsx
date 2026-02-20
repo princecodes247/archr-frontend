@@ -3,7 +3,7 @@ import { useSocketStore } from '../stores/useSocketStore';
 import './MainMenu.css';
 
 interface LeaderboardEntry {
-    name: string;
+    userId: string;
     score: number;
     date: number;
 }
@@ -16,17 +16,17 @@ interface LeaderboardProps {
     className?: string;
 }
 
+// Show first 8 chars of userId as a display name
+const formatUserId = (userId: string) => userId.slice(0, 8);
+
 const Leaderboard: React.FC<LeaderboardProps> = ({
     onBack,
     currentScore,
-    onScoreSubmitted,
+    onScoreSubmitted: _onScoreSubmitted,
     variant = 'fullscreen',
 }) => {
     const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-    const [name, setName] = useState('');
-    const [submitting, setSubmitting] = useState(false);
-    const [submitted, setSubmitted] = useState(false);
-    const { socket } = useSocketStore();
+    const { socket, playerId } = useSocketStore();
 
     useEffect(() => {
         if (!socket) return;
@@ -43,20 +43,6 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
             socket.off('leaderboardUpdate', handleUpdate);
         };
     }, [socket]);
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!name.trim() || !currentScore || !socket) return;
-
-        setSubmitting(true);
-        socket.emit('submitScore', { name: name.trim(), score: currentScore });
-
-        setTimeout(() => {
-            setSubmitting(false);
-            setSubmitted(true);
-            if (onScoreSubmitted) onScoreSubmitted();
-        }, 500);
-    };
 
     const getMedalEmoji = (rank: number) => {
         if (rank === 0) return '🥇';
@@ -92,29 +78,11 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
                 </svg>
             </div>
 
-            {/* Score Submission */}
-            {currentScore !== null && currentScore !== undefined && !submitted && (
+            {/* Current score display (no form needed — auto-submitted) */}
+            {currentScore !== null && currentScore !== undefined && (
                 <div className="lb-submit-card">
                     <div className="lb-submit-label">Your Score</div>
                     <div className="lb-submit-score">{currentScore}</div>
-                    <form onSubmit={handleSubmit} className="lb-submit-form">
-                        <input
-                            type="text"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            placeholder="Enter name"
-                            maxLength={12}
-                            className="lb-submit-input"
-                            autoFocus
-                        />
-                        <button
-                            type="submit"
-                            disabled={submitting || !name.trim()}
-                            className="lb-submit-btn"
-                        >
-                            {submitting ? '...' : 'Submit'}
-                        </button>
-                    </form>
                 </div>
             )}
 
@@ -124,13 +92,20 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
                     <div
                         key={index}
                         className={getEntryClass(index)}
-                        style={{ animationDelay: `${index * 60}ms` }}
+                        style={{
+                            animationDelay: `${index * 60}ms`,
+                        }}
                     >
                         <div className="lb-entry-left">
                             <div className={getRankClass(index)}>
                                 {getMedalEmoji(index) || (index + 1)}
                             </div>
-                            <span className="lb-name">{entry.name}</span>
+                            <span className="lb-name">
+                                {formatUserId(entry.userId)}
+                                {entry.userId === playerId && (
+                                    <span style={{ color: '#c9a84c', fontSize: '10px', marginLeft: '6px' }}>YOU</span>
+                                )}
+                            </span>
                         </div>
                         <span className={`lb-score ${index > 2 ? 'lb-score-default' : ''}`}>
                             {entry.score}
@@ -155,7 +130,7 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
 
             {onBack && (
                 <button onClick={onBack} className="lb-back-btn">
-                    {currentScore ? 'Skip / Close' : 'Back to Menu'}
+                    Back to Menu
                 </button>
             )}
         </div>
