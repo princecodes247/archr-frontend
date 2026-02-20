@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSocketStore } from '../stores/useSocketStore';
+import './MainMenu.css';
 
 interface LeaderboardEntry {
     name: string;
@@ -9,7 +10,7 @@ interface LeaderboardEntry {
 
 interface LeaderboardProps {
     onBack?: () => void;
-    currentScore?: number | null; // If provided, shows submission form
+    currentScore?: number | null;
     onScoreSubmitted?: () => void;
     variant?: 'fullscreen' | 'embedded';
     className?: string;
@@ -20,7 +21,6 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
     currentScore,
     onScoreSubmitted,
     variant = 'fullscreen',
-    className = ''
 }) => {
     const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
     const [name, setName] = useState('');
@@ -31,7 +31,6 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
     useEffect(() => {
         if (!socket) return;
 
-        // Request initial data
         socket.emit('getLeaderboard');
 
         const handleUpdate = (data: LeaderboardEntry[]) => {
@@ -59,85 +58,118 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
         }, 500);
     };
 
-    const containerClasses = variant === 'fullscreen'
-        ? "absolute inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 text-white z-50"
-        : `w-full ${className}`;
+    const getMedalEmoji = (rank: number) => {
+        if (rank === 0) return '🥇';
+        if (rank === 1) return '🥈';
+        if (rank === 2) return '🥉';
+        return null;
+    };
 
-    const contentClasses = variant === 'fullscreen'
-        ? "max-w-md w-full bg-gray-900 rounded-2xl border border-white/10 p-8 shadow-2xl"
-        : "w-full bg-gray-900/50 rounded-2xl border border-white/5 p-6";
+    const getRankClass = (index: number) => {
+        if (index === 0) return 'lb-rank lb-rank-1';
+        if (index === 1) return 'lb-rank lb-rank-2';
+        if (index === 2) return 'lb-rank lb-rank-3';
+        return 'lb-rank lb-rank-default';
+    };
 
-    return (
-        <div className={containerClasses}>
-            <div className={contentClasses}>
-                <h2 className="text-2xl font-bold text-center mb-6 text-yellow-400 tracking-wider">LEADERBOARD</h2>
+    const getEntryClass = (index: number) => {
+        if (index === 0) return 'lb-entry lb-entry-1';
+        if (index === 1) return 'lb-entry lb-entry-2';
+        if (index === 2) return 'lb-entry lb-entry-3';
+        return 'lb-entry';
+    };
 
-                {/* Submission Form */}
-                {currentScore !== null && currentScore !== undefined && !submitted && (
-                    <div className="mb-8 bg-white/5 p-6 rounded-xl border border-white/10">
-                        <div className="text-center mb-4">
-                            <div className="text-sm text-gray-400 uppercase tracking-widest">Your Score</div>
-                            <div className="text-5xl font-bold text-white">{currentScore}</div>
+    const content = (
+        <div className="lb-card">
+            {/* Gold accent line at top */}
+            <div className="lb-header">
+                <svg className="lb-trophy-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L9 7H3l5 4-2 7 6-4 6 4-2-7 5-4h-6L12 2z" opacity="0.9" />
+                </svg>
+                <h2 className="lb-title">Leaderboard</h2>
+                <svg className="lb-trophy-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L9 7H3l5 4-2 7 6-4 6 4-2-7 5-4h-6L12 2z" opacity="0.9" />
+                </svg>
+            </div>
+
+            {/* Score Submission */}
+            {currentScore !== null && currentScore !== undefined && !submitted && (
+                <div className="lb-submit-card">
+                    <div className="lb-submit-label">Your Score</div>
+                    <div className="lb-submit-score">{currentScore}</div>
+                    <form onSubmit={handleSubmit} className="lb-submit-form">
+                        <input
+                            type="text"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="Enter name"
+                            maxLength={12}
+                            className="lb-submit-input"
+                            autoFocus
+                        />
+                        <button
+                            type="submit"
+                            disabled={submitting || !name.trim()}
+                            className="lb-submit-btn"
+                        >
+                            {submitting ? '...' : 'Submit'}
+                        </button>
+                    </form>
+                </div>
+            )}
+
+            {/* Entries */}
+            <div className="lb-list">
+                {entries.map((entry, index) => (
+                    <div
+                        key={index}
+                        className={getEntryClass(index)}
+                        style={{ animationDelay: `${index * 60}ms` }}
+                    >
+                        <div className="lb-entry-left">
+                            <div className={getRankClass(index)}>
+                                {getMedalEmoji(index) || (index + 1)}
+                            </div>
+                            <span className="lb-name">{entry.name}</span>
                         </div>
-                        <form onSubmit={handleSubmit} className="flex gap-2">
-                            <input
-                                type="text"
-                                value={name}
-                                onChange={(e) => setName(e.target.value)}
-                                placeholder="Enter Name"
-                                maxLength={12}
-                                className="flex-1 bg-black/50 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-yellow-400"
-                                autoFocus
-                            />
-                            <button
-                                type="submit"
-                                disabled={submitting || !name.trim()}
-                                className="bg-yellow-500 text-black font-bold px-6 py-2 rounded-lg hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {submitting ? '...' : 'SUBMIT'}
-                            </button>
-                        </form>
+                        <span className={`lb-score ${index > 2 ? 'lb-score-default' : ''}`}>
+                            {entry.score}
+                        </span>
+                    </div>
+                ))}
+                {entries.length === 0 && (
+                    <div className="lb-empty">
+                        <svg className="lb-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                            <circle cx="12" cy="12" r="10" />
+                            <circle cx="12" cy="12" r="6" />
+                            <circle cx="12" cy="12" r="2" />
+                            <line x1="12" y1="2" x2="12" y2="4" />
+                            <line x1="12" y1="20" x2="12" y2="22" />
+                            <line x1="2" y1="12" x2="4" y2="12" />
+                            <line x1="20" y1="12" x2="22" y2="12" />
+                        </svg>
+                        <span className="lb-empty-text">No high scores yet</span>
                     </div>
                 )}
-
-                {/* List */}
-                <div className="space-y-2 mb-8 max-h-[400px] overflow-y-auto custom-scrollbar">
-                    {entries.map((entry, index) => (
-                        <div
-                            key={index}
-                            className={`flex items-center justify-between p-3 rounded-lg ${index === 0 ? 'bg-yellow-500/20 border border-yellow-500/50' :
-                                index === 1 ? 'bg-gray-400/20' :
-                                    index === 2 ? 'bg-orange-700/20' : 'bg-white/5'
-                                }`}
-                        >
-                            <div className="flex items-center gap-4">
-                                <div className={`font-mono font-bold w-6 text-center ${index === 0 ? 'text-yellow-400' :
-                                    index === 1 ? 'text-gray-300' :
-                                        index === 2 ? 'text-orange-400' : 'text-gray-500'
-                                    }`}>
-                                    #{index + 1}
-                                </div>
-                                <div className="font-bold text-gray-200">{entry.name}</div>
-                            </div>
-                            <div className="font-mono font-bold text-yellow-500">{entry.score}</div>
-                        </div>
-                    ))}
-                    {entries.length === 0 && (
-                        <div className="text-center text-gray-500 py-8">No high scores yet</div>
-                    )}
-                </div>
-
-                {onBack && (
-                    <button
-                        onClick={onBack}
-                        className="w-full text-center text-gray-400 hover:text-white py-2 uppercase tracking-widest text-sm font-bold transition-colors mt-4"
-                    >
-                        {currentScore ? 'Skip / Close' : 'Back to Menu'}
-                    </button>
-                )}
             </div>
+
+            {onBack && (
+                <button onClick={onBack} className="lb-back-btn">
+                    {currentScore ? 'Skip / Close' : 'Back to Menu'}
+                </button>
+            )}
         </div>
     );
+
+    if (variant === 'fullscreen') {
+        return (
+            <div className="lb-fullscreen">
+                {content}
+            </div>
+        );
+    }
+
+    return content;
 };
 
 export default Leaderboard;

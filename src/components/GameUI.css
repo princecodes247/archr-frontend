@@ -1,0 +1,219 @@
+/* ═══════════════════════════════════════════════════════════════
+   ARCHR — In-Game HUD Styles
+   Consistent with the archery club design system
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Shared ── */
+.game-hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 16px 20px;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    z-index: 10;
+}
+
+.game-hud-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+/* ── Score Card ── */
+.hud-score-card {
+    padding: 10px 16px;
+    border-radius: 12px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(6, 14, 8, 0.55);
+    border: 1px solid rgba(240, 236, 228, 0.06);
+    min-width: 72px;
+    transition: all 0.3s ease;
+}
+
+.hud-score-card--active {
+    border-color: rgba(201, 168, 76, 0.35);
+    background: rgba(6, 14, 8, 0.65);
+    box-shadow: 0 0 20px rgba(201, 168, 76, 0.08);
+}
+
+.hud-score-card--opponent-active {
+    border-color: rgba(248, 113, 113, 0.3);
+}
+
+.hud-score-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    color: rgba(240, 236, 228, 0.4);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+
+.hud-score-label--gold {
+    color: rgba(201, 168, 76, 0.7);
+}
+
+.hud-score-value {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 32px;
+    font-weight: 900;
+    color: #f0ece4;
+    line-height: 1;
+}
+
+/* ── Center Info ── */
+.hud-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Timer pill */
+.hud-timer {
+    padding: 8px 22px;
+    border-radius: 20px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background: rgba(6, 14, 8, 0.5);
+    border: 1px solid rgba(240, 236, 228, 0.06);
+    transition: all 0.3s ease;
+}
+
+.hud-timer--urgent {
+    border-color: rgba(201, 168, 76, 0.3);
+    background: rgba(120, 80, 10, 0.3);
+}
+
+.hud-timer--critical {
+    border-color: rgba(220, 60, 60, 0.4);
+    background: rgba(120, 20, 20, 0.4);
+    animation: timerPulse 0.8s ease-in-out infinite;
+}
+
+@keyframes timerPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 60, 60, 0); }
+    50% { box-shadow: 0 0 16px 2px rgba(220, 60, 60, 0.2); }
+}
+
+.hud-timer-value {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 26px;
+    font-weight: 700;
+    color: #f0ece4;
+    line-height: 1;
+}
+
+.hud-timer-value--urgent {
+    color: #c9a84c;
+}
+
+.hud-timer-value--critical {
+    color: #f87171;
+}
+
+/* Shot counter / Round */
+.hud-meta {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    color: rgba(240, 236, 228, 0.3);
+    text-transform: uppercase;
+}
+
+/* Round pill */
+.hud-round {
+    padding: 6px 20px;
+    border-radius: 16px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background: rgba(6, 14, 8, 0.5);
+    border: 1px solid rgba(240, 236, 228, 0.06);
+}
+
+.hud-round-text {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: #f0ece4;
+}
+
+.hud-round-final {
+    color: #c9a84c;
+    font-size: 14px;
+    letter-spacing: 0.05em;
+}
+
+/* Turn indicator */
+.hud-turn-badge {
+    padding: 4px 14px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-top: 6px;
+}
+
+.hud-turn-badge--mine {
+    background: rgba(201, 168, 76, 0.2);
+    color: #c9a84c;
+    border: 1px solid rgba(201, 168, 76, 0.3);
+    animation: turnGlow 1.5s ease-in-out infinite;
+}
+
+@keyframes turnGlow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(201, 168, 76, 0); }
+    50% { box-shadow: 0 0 12px 2px rgba(201, 168, 76, 0.15); }
+}
+
+.hud-turn-badge--opponent {
+    background: rgba(240, 236, 228, 0.05);
+    color: rgba(240, 236, 228, 0.35);
+    border: 1px solid rgba(240, 236, 228, 0.06);
+}
+
+.hud-turn-badge--waiting {
+    background: rgba(58, 124, 74, 0.12);
+    color: rgba(110, 231, 183, 0.7);
+    border: 1px solid rgba(58, 124, 74, 0.2);
+    animation: waitPulse 2s ease-in-out infinite;
+}
+
+@keyframes waitPulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
+}
+
+/* ── Spacer ── */
+.hud-spacer {
+    width: 72px;
+}
+
+/* ── Bottom hint ── */
+.hud-bottom {
+    text-align: center;
+    padding-bottom: 8px;
+}
+
+.hud-hint {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(240, 236, 228, 0.25);
+    letter-spacing: 0.04em;
+}
+
+/* ── Waiting state ── */
+.hud-waiting {
+    position: absolute;
+    top: 16px;
+    left: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(240, 236, 228, 0.35);
+    letter-spacing: 0.04em;
+}
