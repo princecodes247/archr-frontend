@@ -11,7 +11,8 @@ interface SocketState {
     socket: Socket | null;
     connected: boolean;
     room: Room | null;
-    playerId: string | undefined;   // userId (persistent)
+    playerId: string | undefined;     // userId (persistent)
+    playerName: string | undefined;   // auto-generated name
     finalScore: number | null;
 
     // Actions
@@ -26,6 +27,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
     connected: false,
     room: null,
     playerId: undefined,
+    playerName: undefined,
     finalScore: null,
 
     connect: () => {
@@ -41,18 +43,18 @@ export const useSocketStore = create<SocketState>((set, get) => ({
             // Send stored userId (or nothing) for registration
             const storedUserId = localStorage.getItem(STORAGE_KEY) || undefined;
 
-            newSocket.emit('register', { userId: storedUserId }, (response: { userId: string }) => {
+            newSocket.emit('register', { userId: storedUserId }, (response: { userId: string; name: string }) => {
                 // Callback-based acknowledgment
-                console.log('Registered with userId:', response.userId);
+                console.log('Registered with userId:', response.userId, 'name:', response.name);
                 localStorage.setItem(STORAGE_KEY, response.userId);
-                set({ connected: true, playerId: response.userId });
+                set({ connected: true, playerId: response.userId, playerName: response.name });
             });
 
             // Fallback: if server uses emit instead of callback
-            newSocket.on('registered', (data: { userId: string }) => {
-                console.log('Registered (event) with userId:', data.userId);
+            newSocket.on('registered', (data: { userId: string; name: string }) => {
+                console.log('Registered (event) with userId:', data.userId, 'name:', data.name);
                 localStorage.setItem(STORAGE_KEY, data.userId);
-                set({ connected: true, playerId: data.userId });
+                set({ connected: true, playerId: data.userId, playerName: data.name });
             });
         });
 

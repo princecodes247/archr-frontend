@@ -4,6 +4,7 @@ import './MainMenu.css';
 
 interface LeaderboardEntry {
     userId: string;
+    name: string;
     score: number;
     date: number;
 }
@@ -16,8 +17,6 @@ interface LeaderboardProps {
     className?: string;
 }
 
-// Show first 8 chars of userId as a display name
-const formatUserId = (userId: string) => userId.slice(0, 8);
 
 const Leaderboard: React.FC<LeaderboardProps> = ({
     onBack,
@@ -101,7 +100,7 @@ const Leaderboard: React.FC<LeaderboardProps> = ({
                                 {getMedalEmoji(index) || (index + 1)}
                             </div>
                             <span className="lb-name">
-                                {formatUserId(entry.userId)}
+                                {entry.name}
                                 {entry.userId === playerId && (
                                     <span style={{ color: '#c9a84c', fontSize: '10px', marginLeft: '6px' }}>YOU</span>
                                 )}
