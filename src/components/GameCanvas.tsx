@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react';
 import { useControls, folder } from 'leva';
 import { useSocketStore } from '../stores/useSocketStore';
 import type { Room, Point } from '../types';
+import { playAim, playRelease, playFlight, playImpact, playScorePop, playMatchEnd } from '../sounds/SoundManager';
 
 interface GameCanvasProps {
     onExit: () => void;
@@ -185,6 +186,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             f.playerIndex = pIdx;
 
             pendingScore.current = data.score; // Defer until arrow lands
+            playFlight(controlsRef.current.flightDuration);
 
             // Release camera zoom bump
             releaseZoomBump.current = 1.0;
@@ -547,6 +549,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
                     postShotZoom.current = { active: true, timer: holdFrames, hitPoint: flight.hitPoint };
                     // Now show the score
                     if (pendingScore.current !== null) {
+                        playImpact(pendingScore.current);
+                        playScorePop(pendingScore.current);
                         lastScore.current = pendingScore.current;
                         scoreFlash.current = 1;
                         pendingScore.current = null;
@@ -594,6 +598,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
                     ? roomStateRef.current.timeRemaining <= 0
                     : roomStateRef.current.round > roomStateRef.current.maxRounds;
                 if (isGameOver) {
+                    if (gameOverTimer.current === 0) playMatchEnd();
                     gameOverTimer.current += deltaTime;
                     // Game over screen is now rendered by React (GameOver component)
                     // Just darken the canvas slightly
@@ -649,6 +654,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
 
         isAiming.current = true;
         hasInteracted.current = true; // Dismiss tutorial
+        playAim();
         aimTimer.current = 1.0;
         shouldAutoFire.current = false;
 
@@ -689,6 +695,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
         isAiming.current = false;
 
         // Final shot
+        playRelease();
         socket?.emit('shoot', { aimPosition: reticlePos.current });
     };
 
