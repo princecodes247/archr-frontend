@@ -29,7 +29,7 @@ const FLETCHING_PALETTES: FletchingColors[] = [
     },
 ];
 
-const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
+const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const { socket, room, playerId } = useSocketStore();
     // Solo: always your turn while time remains. Multiplayer: check currentTurn.
@@ -49,7 +49,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
         }),
         'Result': folder({
             resultZoom: { value: 3.0, min: 1.0, max: 6.0, step: 0.1, label: 'Result Zoom' },
-            holdTime: { value: 3.2, min: 0.5, max: 5.0, step: 0.1, label: 'Hold Duration (s)' },
+            holdTime: { value: 2.5, min: 0.5, max: 5.0, step: 0.1, label: 'Hold Duration (s)' },
             gameOverDelay: { value: 1000, min: 0, max: 2000, step: 100, label: 'Game Over Delay (ms)' },
         }),
         'Target': folder({
@@ -595,8 +595,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                     : roomStateRef.current.round > roomStateRef.current.maxRounds;
                 if (isGameOver) {
                     gameOverTimer.current += deltaTime;
+                    // Game over screen is now rendered by React (GameOver component)
+                    // Just darken the canvas slightly
                     if (gameOverTimer.current > controlsRef.current.gameOverDelay) {
-                        drawGameOver(ctx, w, h, roomStateRef.current, socket?.id, gameOverTimer.current - controlsRef.current.gameOverDelay);
+                        ctx.fillStyle = 'rgba(6, 14, 8, 0.7)';
+                        ctx.fillRect(0, 0, w, h);
                     }
                 } else {
                     gameOverTimer.current = 0;
@@ -632,22 +635,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit }) => {
                 : roomStateRef.current.round > roomStateRef.current.maxRounds
         );
         if (isGameOver) {
-            // Check collision with Play Again button
-            const w = window.innerWidth;
-            const h = window.innerHeight;
-            const cx = w / 2;
-            const cy = h / 2;
-            const btnW = 180;
-            const btnH = 48;
-            const btnY = roomStateRef.current?.mode === 'solo'
-                ? cy + Math.min(w, h) * 0.12 + 100
-                : cy + 70;
-
-            // Check if click is inside button (simple box check)
-            if (x >= cx - btnW / 2 && x <= cx + btnW / 2 &&
-                y >= btnY && y <= btnY + btnH) {
-                onExit();
-            }
+            // Game over UI is now handled by React overlay
             return;
         }
 
@@ -1271,7 +1259,7 @@ const drawHUD = (
         } else if (lastScore === 0) {
             ctx.font = `500 18px 'DM Sans', system-ui, sans-serif`;
             ctx.fillStyle = 'rgba(240, 236, 228, 0.45)';
-            ctx.fillText('Better luck next time', w / 2, yPos + 45);
+            // ctx.fillText('Better luck next time', w / 2, yPos + 45);
         }
         ctx.restore();
     }
@@ -1358,347 +1346,6 @@ const drawTutorial = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
     ctx.shadowColor = 'rgba(0,0,0,0.6)';
     ctx.shadowBlur = 4;
     ctx.fillText('TAP & DRAG TO AIM', cx, cy - 40);
-    ctx.restore();
-};
-
-const drawGameOver = (ctx: CanvasRenderingContext2D, w: number, h: number, room: Room, myId: string | undefined, animTime: number) => {
-    // ── Easing functions ──
-    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
-    const easeOutBack = (t: number) => {
-        const c1 = 1.70158;
-        const c3 = c1 + 1;
-        return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-    };
-
-    // ── Animation phases ──
-    const fadeIn = Math.min(1, animTime / 600);
-    const contentReveal = Math.min(1, Math.max(0, animTime - 200) / 500);
-    const statsReveal = Math.min(1, Math.max(0, animTime - 500) / 400);
-    const buttonReveal = Math.min(1, Math.max(0, animTime - 800) / 400);
-    const ringProgress = easeOutCubic(Math.min(1, Math.max(0, animTime - 300) / 1200));
-
-    const me = room.players.find(p => p.id === myId);
-    const myScore = me?.score || 0;
-    const cx = w / 2;
-    const cy = h / 2;
-
-    // ── Background overlay — forest green tinted ──
-    ctx.save();
-    ctx.globalAlpha = fadeIn;
-    const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.7);
-    bgGrad.addColorStop(0, 'rgba(6, 14, 8, 0.92)');
-    bgGrad.addColorStop(0.6, 'rgba(6, 10, 8, 0.94)');
-    bgGrad.addColorStop(1, 'rgba(0, 0, 0, 0.96)');
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, w, h);
-
-    // Subtle noise texture
-    ctx.globalAlpha = fadeIn * 0.025;
-    for (let i = 0; i < 200; i++) {
-        const nx = (Math.sin(i * 777.7) * 0.5 + 0.5) * w;
-        const ny = (Math.cos(i * 333.3) * 0.5 + 0.5) * h;
-        ctx.fillStyle = '#f0ece4';
-        ctx.fillRect(nx, ny, 1, 1);
-    }
-    ctx.restore();
-
-    ctx.save();
-    ctx.textAlign = 'center';
-
-    if (room.mode === 'solo') {
-        // ═══════════════════════════════════════
-        // SOLO — Accuracy Ring + Stats
-        // ═══════════════════════════════════════
-        const shotsCount = Math.max(1, room.round - 1);
-        const avgPerShot = myScore / shotsCount;
-        const accuracyPct = Math.min(1, avgPerShot / 10);
-
-        let ratingText: string;
-        let ratingColor: string;
-        let ratingGlow: string;
-        let subtitleText: string;
-
-        if (avgPerShot >= 9.5) {
-            ratingText = 'PERFECT';
-            ratingColor = '#c9a84c';
-            ratingGlow = 'rgba(201, 168, 76, 0.4)';
-            subtitleText = 'Legendary accuracy';
-        } else if (avgPerShot >= 8) {
-            ratingText = 'EXCELLENT';
-            ratingColor = '#6ee7b7';
-            ratingGlow = 'rgba(110, 231, 183, 0.3)';
-            subtitleText = 'Sharp shooting';
-        } else if (avgPerShot >= 6) {
-            ratingText = 'GREAT';
-            ratingColor = '#7dd3fc';
-            ratingGlow = 'rgba(125, 211, 252, 0.3)';
-            subtitleText = 'Well done';
-        } else if (avgPerShot >= 4) {
-            ratingText = 'GOOD';
-            ratingColor = '#a78bfa';
-            ratingGlow = 'rgba(167, 139, 250, 0.25)';
-            subtitleText = 'Solid effort';
-        } else if (avgPerShot >= 2) {
-            ratingText = 'OK';
-            ratingColor = '#94a3b8';
-            ratingGlow = 'rgba(148, 163, 184, 0.2)';
-            subtitleText = 'Keep practicing';
-        } else {
-            ratingText = 'ROUGH';
-            ratingColor = '#f87171';
-            ratingGlow = 'rgba(248, 113, 113, 0.2)';
-            subtitleText = 'Try again';
-        }
-
-        // ── Accuracy ring ──
-        const ringRadius = Math.min(w, h) * 0.12;
-        const ringCenterY = cy - 55;
-        const ringWidth = 6;
-
-        // Ring background track
-        ctx.globalAlpha = fadeIn * 0.15;
-        ctx.beginPath();
-        ctx.arc(cx, ringCenterY, ringRadius, -Math.PI / 2, Math.PI * 1.5);
-        ctx.strokeStyle = 'rgba(240, 236, 228, 0.8)';
-        ctx.lineWidth = ringWidth;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-
-        // Ring progress arc
-        const arcEnd = -Math.PI / 2 + Math.PI * 2 * accuracyPct * ringProgress;
-        ctx.globalAlpha = fadeIn;
-        ctx.beginPath();
-        ctx.arc(cx, ringCenterY, ringRadius, -Math.PI / 2, arcEnd);
-        ctx.strokeStyle = ratingColor;
-        ctx.lineWidth = ringWidth;
-        ctx.lineCap = 'round';
-        ctx.shadowColor = ratingGlow;
-        ctx.shadowBlur = 16;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        // Score inside ring
-        const scoreScale = easeOutBack(contentReveal);
-        ctx.globalAlpha = fadeIn * contentReveal;
-        ctx.save();
-        ctx.translate(cx, ringCenterY);
-        ctx.scale(scoreScale, scoreScale);
-        ctx.font = `900 42px 'Playfair Display', Georgia, serif`;
-        ctx.fillStyle = '#f0ece4';
-        ctx.fillText(`${myScore}`, 0, 12);
-        ctx.font = `600 10px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.15em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.4)';
-        ctx.fillText('POINTS', 0, 30);
-        ctx.letterSpacing = '0px';
-        ctx.restore();
-
-        // ── Rating text above ring ──
-        const titleSlide = easeOutBack(contentReveal);
-        const titleY = (ringCenterY - ringRadius - 40) - (1 - titleSlide) * 30;
-        ctx.globalAlpha = fadeIn * contentReveal;
-        ctx.font = `600 11px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.3em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.3)';
-        ctx.fillText('TIME\'S UP', cx, titleY - 28);
-        ctx.letterSpacing = '0px';
-
-        ctx.font = `900 38px 'Playfair Display', Georgia, serif`;
-        ctx.fillStyle = ratingColor;
-        ctx.shadowColor = ratingGlow;
-        ctx.shadowBlur = 24 * fadeIn;
-        ctx.fillText(ratingText, cx, titleY);
-        ctx.shadowBlur = 0;
-
-        // Subtitle
-        ctx.font = `italic 400 15px 'Playfair Display', Georgia, serif`;
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.45)';
-        ctx.fillText(subtitleText, cx, titleY + 22);
-
-        // ── Stats row ──
-        const statsY = ringCenterY + ringRadius + 40;
-        const statSpacing = Math.min(120, w * 0.22);
-        const statsAlpha = easeOutCubic(statsReveal);
-        ctx.globalAlpha = fadeIn * statsAlpha;
-
-        // Stat: Shots
-        const statSlide1 = easeOutBack(Math.min(1, statsReveal * 1.5));
-        const s1y = statsY + (1 - statSlide1) * 15;
-        ctx.font = `600 10px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.12em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.35)';
-        ctx.fillText('SHOTS', cx - statSpacing, s1y);
-        ctx.font = `700 24px 'Playfair Display', Georgia, serif`;
-        ctx.letterSpacing = '0px';
-        ctx.fillStyle = '#f0ece4';
-        ctx.fillText(`${shotsCount}`, cx - statSpacing, s1y + 26);
-
-        // Stat: Avg
-        const statSlide2 = easeOutBack(Math.min(1, statsReveal * 1.3));
-        const s2y = statsY + (1 - statSlide2) * 15;
-        ctx.font = `600 10px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.12em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.35)';
-        ctx.fillText('AVG / SHOT', cx, s2y);
-        ctx.font = `700 24px 'Playfair Display', Georgia, serif`;
-        ctx.letterSpacing = '0px';
-        ctx.fillStyle = ratingColor;
-        ctx.fillText(avgPerShot.toFixed(1), cx, s2y + 26);
-
-        // Stat: Accuracy %
-        const statSlide3 = easeOutBack(Math.min(1, statsReveal * 1.1));
-        const s3y = statsY + (1 - statSlide3) * 15;
-        ctx.font = `600 10px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.12em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.35)';
-        ctx.fillText('ACCURACY', cx + statSpacing, s3y);
-        ctx.font = `700 24px 'Playfair Display', Georgia, serif`;
-        ctx.letterSpacing = '0px';
-        ctx.fillStyle = '#f0ece4';
-        ctx.fillText(`${Math.round(accuracyPct * ringProgress * 100)}%`, cx + statSpacing, s3y + 26);
-
-        // Dividers between stats
-        ctx.globalAlpha = fadeIn * statsAlpha * 0.1;
-        ctx.fillStyle = '#f0ece4';
-        ctx.fillRect(cx - statSpacing / 2, statsY - 5, 1, 40);
-        ctx.fillRect(cx + statSpacing / 2, statsY - 5, 1, 40);
-
-        // ── Sparkle particles on good scores ──
-        if (avgPerShot >= 6 && animTime > 500) {
-            const sparkleTime = animTime * 0.001;
-            for (let i = 0; i < 8; i++) {
-                const angle = sparkleTime * 0.5 + i * Math.PI / 4;
-                const dist = ringRadius + 15 + Math.sin(sparkleTime * 2 + i) * 8;
-                const sx = cx + Math.cos(angle) * dist;
-                const sy = ringCenterY + Math.sin(angle) * dist;
-                const size = 1.5 + Math.sin(sparkleTime * 3 + i * 2) * 0.8;
-                ctx.fillStyle = ratingColor;
-                ctx.globalAlpha = fadeIn * (0.3 + Math.sin(sparkleTime * 4 + i) * 0.3);
-                ctx.beginPath();
-                ctx.arc(sx, sy, size, 0, Math.PI * 2);
-                ctx.fill();
-            }
-        }
-
-    } else {
-        // ═══════════════════════════════════════
-        // MULTIPLAYER GAME OVER
-        // ═══════════════════════════════════════
-        const opponent = room.players.find(p => p.id !== myId);
-        const oppScore = opponent?.score || 0;
-
-        let resultText: string;
-        let resultColor: string;
-        let resultGlow: string;
-
-        if (myScore > oppScore) {
-            resultText = 'VICTORY';
-            resultColor = '#c9a84c';
-            resultGlow = 'rgba(201, 168, 76, 0.4)';
-        } else if (myScore < oppScore) {
-            resultText = 'DEFEAT';
-            resultColor = '#94a3b8';
-            resultGlow = 'rgba(148, 163, 184, 0.2)';
-        } else {
-            resultText = 'DRAW';
-            resultColor = '#f0ece4';
-            resultGlow = 'rgba(240, 236, 228, 0.2)';
-        }
-
-        // Title
-        const titleSlide = easeOutBack(contentReveal);
-        const titleY = (cy - 100) - (1 - titleSlide) * 40;
-        ctx.globalAlpha = fadeIn * contentReveal;
-        ctx.font = `600 11px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.3em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.3)';
-        ctx.fillText('GAME OVER', cx, titleY - 24);
-        ctx.letterSpacing = '0px';
-
-        // Result — zooms in
-        const resultScale = easeOutBack(contentReveal);
-        ctx.save();
-        ctx.translate(cx, titleY + 20);
-        ctx.scale(resultScale, resultScale);
-        ctx.font = `900 52px 'Playfair Display', Georgia, serif`;
-        ctx.fillStyle = resultColor;
-        ctx.shadowColor = resultGlow;
-        ctx.shadowBlur = 28 * fadeIn;
-        ctx.fillText(resultText, 0, 0);
-        ctx.shadowBlur = 0;
-        ctx.restore();
-
-        // Score comparison
-        const scoreY = cy + 20 + (1 - easeOutCubic(statsReveal)) * 20;
-        ctx.globalAlpha = fadeIn * easeOutCubic(statsReveal);
-
-        // My score (left)
-        ctx.textAlign = 'right';
-        ctx.font = `900 48px 'Playfair Display', Georgia, serif`;
-        ctx.fillStyle = myScore >= oppScore ? resultColor : 'rgba(255,255,255,0.6)';
-        ctx.fillText(`${myScore}`, cx - 24, scoreY);
-
-        // Divider
-        ctx.textAlign = 'center';
-        ctx.font = `400 24px 'DM Sans', system-ui, sans-serif`;
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.2)';
-        ctx.fillText('—', cx, scoreY - 4);
-
-        // Opponent score (right)
-        ctx.textAlign = 'left';
-        ctx.font = `900 48px 'Playfair Display', Georgia, serif`;
-        ctx.fillStyle = oppScore > myScore ? '#f87171' : 'rgba(240, 236, 228, 0.5)';
-        ctx.fillText(`${oppScore}`, cx + 24, scoreY);
-
-        // Labels
-        ctx.textAlign = 'center';
-        ctx.font = `600 10px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.1em';
-        ctx.fillStyle = 'rgba(240, 236, 228, 0.3)';
-        ctx.fillText('YOU', cx - 50, scoreY + 22);
-        ctx.fillText('OPP', cx + 50, scoreY + 22);
-        ctx.letterSpacing = '0px';
-    }
-
-    // ── Play Again button (gold gradient) ──
-    if (animTime > 800) {
-        const btnAlpha = easeOutCubic(buttonReveal);
-        ctx.globalAlpha = btnAlpha;
-
-        const btnW = 180;
-        const btnH = 48;
-        const btnY = room.mode === 'solo'
-            ? cy + Math.min(w, h) * 0.12 + 100
-            : cy + 70;
-
-        // Gold gradient fill
-        const btnGrad = ctx.createLinearGradient(cx - btnW / 2, btnY, cx + btnW / 2, btnY + btnH);
-        btnGrad.addColorStop(0, '#c9a84c');
-        btnGrad.addColorStop(1, '#b8943f');
-
-        ctx.shadowColor = 'rgba(201, 168, 76, 0.25)';
-        ctx.shadowBlur = 20;
-        ctx.fillStyle = btnGrad;
-        ctx.beginPath();
-        ctx.roundRect(cx - btnW / 2, btnY, btnW, btnH, 14);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Subtle inner highlight
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(cx - btnW / 2 + 0.5, btnY + 0.5, btnW - 1, btnH - 1, 14);
-        ctx.stroke();
-
-        ctx.fillStyle = '#1a1206';
-        ctx.textAlign = 'center';
-        ctx.font = `700 13px 'DM Sans', system-ui, sans-serif`;
-        ctx.letterSpacing = '0.08em';
-        ctx.fillText('PLAY AGAIN', cx, btnY + btnH / 2 + 5);
-        ctx.letterSpacing = '0px';
-    }
-
     ctx.restore();
 };
 
