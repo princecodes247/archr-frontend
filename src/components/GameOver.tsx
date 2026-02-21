@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import type { Room } from '../types';
+import { shareScoreCard } from './ShareCard';
 import './GameOver.css';
 
 interface GameOverProps {
@@ -125,6 +126,18 @@ const AccuracyRing: React.FC<{ score: number; color: string; glow: string; accur
 const GameOver: React.FC<GameOverProps> = ({ room, playerId, onPlayAgain }) => {
     const me = room.players.find(p => p.userId === playerId);
     const myScore = me?.score || 0;
+    const [sharing, setSharing] = useState(false);
+
+    const handleShare = useCallback(async () => {
+        setSharing(true);
+        try {
+            await shareScoreCard(room, playerId);
+        } catch (e) {
+            console.error('Share failed:', e);
+        } finally {
+            setSharing(false);
+        }
+    }, [room, playerId]);
 
     if (room.mode === 'solo') {
         const shotsCount = Math.max(1, room.round - 1);
@@ -165,9 +178,19 @@ const GameOver: React.FC<GameOverProps> = ({ room, playerId, onPlayAgain }) => {
                         </div>
                     </div>
 
-                    <button className="gameover-btn" onClick={onPlayAgain}>
-                        PLAY AGAIN
-                    </button>
+                    <div className="gameover-btn-row">
+                        <button className="gameover-btn gameover-btn--share" onClick={handleShare} disabled={sharing}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                                <polyline points="16 6 12 2 8 6" />
+                                <line x1="12" y1="2" x2="12" y2="15" />
+                            </svg>
+                            {sharing ? 'SHARING…' : 'SHARE'}
+                        </button>
+                        <button className="gameover-btn" onClick={onPlayAgain}>
+                            PLAY AGAIN
+                        </button>
+                    </div>
                 </div>
             </div>
         );
@@ -226,9 +249,19 @@ const GameOver: React.FC<GameOverProps> = ({ room, playerId, onPlayAgain }) => {
                     </div>
                 </div>
 
-                <button className="gameover-btn" onClick={onPlayAgain}>
-                    PLAY AGAIN
-                </button>
+                <div className="gameover-btn-row">
+                    <button className="gameover-btn gameover-btn--share" onClick={handleShare} disabled={sharing}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                            <polyline points="16 6 12 2 8 6" />
+                            <line x1="12" y1="2" x2="12" y2="15" />
+                        </svg>
+                        {sharing ? 'SHARING…' : 'SHARE'}
+                    </button>
+                    <button className="gameover-btn" onClick={onPlayAgain}>
+                        PLAY AGAIN
+                    </button>
+                </div>
             </div>
         </div>
     );

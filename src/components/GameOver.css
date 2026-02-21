@@ -423,6 +423,55 @@
     31% { left: -60px; }
 }
 
+/* ── Button row (Share + Play Again side by side) ── */
+.gameover-btn-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    opacity: 0;
+    animation: btn-reveal 0.5s 0.7s ease forwards;
+}
+
+.gameover-btn-row .gameover-btn {
+    opacity: 1;
+    animation: none;
+    transform: none;
+}
+
+/* ── Share button (ghost/outline variant) ── */
+.gameover-btn--share {
+    background: transparent !important;
+    color: rgba(201, 168, 76, 0.8) !important;
+    border: 1px solid rgba(201, 168, 76, 0.25) !important;
+    box-shadow:
+        0 0 0 1px rgba(201, 168, 76, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+    gap: 8px;
+    width: 140px;
+}
+
+.gameover-btn--share::after {
+    display: none;
+}
+
+.gameover-btn--share:hover {
+    background: rgba(201, 168, 76, 0.08) !important;
+    border-color: rgba(201, 168, 76, 0.4) !important;
+    box-shadow:
+        0 4px 16px rgba(201, 168, 76, 0.1),
+        0 0 0 1px rgba(201, 168, 76, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+}
+
+.gameover-btn--share:active {
+    background: rgba(201, 168, 76, 0.12) !important;
+}
+
+.gameover-btn--share:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* ── Sparkle particles (absolute positioned) ── */
 .gameover-sparkles {
     position: absolute;
