@@ -40,8 +40,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
     // ── Leva GUI Controls ──
     const controls = useControls({
         'Aiming Feel': folder({
-            smoothing: { value: 0.35, min: 0.05, max: 1.0, step: 0.05, label: 'Smoothing' },
-            sensitivity: { value: 1.0, min: 0.2, max: 3.0, step: 0.1, label: 'Sensitivity' },
+            impulseStrength: { value: 0.9, min: 0.1, max: 2, step: 0.1, label: 'Impulse' },
+            dampingFactor: { value: 0.999, min: 0.90, max: 1.0, step: 0.001, label: 'Damping' },
+            maxVelocity: { value: 400, min: 50, max: 800, step: 10, label: 'Max Vel (px/s)' },
         }),
         'Aiming': folder({
             timerSeconds: { value: 5.0, min: 1.0, max: 15.0, step: 0.5, label: 'Timer (s)' },
@@ -75,7 +76,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
 
     // Game State Refs (mutable, used in animation loop)
     const reticlePos = useRef<Point>({ x: 0, y: 0 });
-    const inputTarget = useRef<Point>({ x: 0, y: 0 });  // Raw accumulated input position
+    const aimVelocity = useRef<Point>({ x: 0, y: 0 });   // Velocity-driven aim
+    const aimStartTime = useRef<number>(0);                // When aiming began (for time pressure)
     const lastInputPos = useRef<Point | null>(null);
     const wind = useRef<Point>({ x: 0, y: 0 });
     const isAiming = useRef(false);
@@ -237,15 +239,33 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             const targetCenterX = centerX;
             const targetCenterY = horizonY + 80;
 
-            // ── Reticle Update (smooth follow) ──
+            // ── Reticle Update (inertia / velocity-driven) ──
             if (isMyTurnRef.current && isAiming.current) {
-                const s = controlsRef.current.smoothing;
+                const dtSec = deltaTime / 1000;
+                const vel = aimVelocity.current;
                 const pos = reticlePos.current;
-                const target = inputTarget.current;
+                const cfg = controlsRef.current;
 
-                // Lerp toward input target for fluid motion
-                pos.x += (target.x - pos.x) * s;
-                pos.y += (target.y - pos.y) * s;
+                // Time pressure: increase damping slightly after 3s of aiming
+                const aimElapsed = (now - aimStartTime.current) / 1000;
+                const pressureDamp = aimElapsed > 3 ? Math.max(cfg.dampingFactor - 0.003, 0.90) : cfg.dampingFactor;
+
+                // Apply damping (frame-rate independent)
+                const frameDamp = Math.pow(pressureDamp, dtSec * 60);
+                vel.x *= frameDamp;
+                vel.y *= frameDamp;
+
+                // Clamp velocity magnitude
+                const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+                const maxV = cfg.maxVelocity;
+                if (speed > maxV) {
+                    vel.x = (vel.x / speed) * maxV;
+                    vel.y = (vel.y / speed) * maxV;
+                }
+
+                // Integrate position
+                pos.x += vel.x * dtSec;
+                pos.y += vel.y * dtSec;
 
                 // Clamp to target area
                 const maxR = 160;
@@ -253,10 +273,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
                 if (dist > maxR) {
                     pos.x = (pos.x / dist) * maxR;
                     pos.y = (pos.y / dist) * maxR;
+                    // Kill outward velocity component at boundary
+                    const nx = pos.x / maxR, ny = pos.y / maxR;
+                    const dot = vel.x * nx + vel.y * ny;
+                    if (dot > 0) { vel.x -= dot * nx; vel.y -= dot * ny; }
                 }
             } else if (!isMyTurnRef.current) {
                 reticlePos.current = { x: 0, y: 0 };
-                inputTarget.current = { x: 0, y: 0 };
+                aimVelocity.current = { x: 0, y: 0 };
                 lastInputPos.current = null;
             }
 
@@ -640,7 +664,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             y: Math.sin(spawnAngle) * targetRadius * (0.6 + Math.random() * 0.4)
         };
         reticlePos.current = { ...startPos };
-        inputTarget.current = { ...startPos };
+        aimVelocity.current = { x: 0, y: 0 };
+        aimStartTime.current = performance.now();
 
         lastInputPos.current = { x, y };
         lastScore.current = null;
@@ -652,9 +677,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
         if (lastInputPos.current) {
             const dx = x - lastInputPos.current.x;
             const dy = y - lastInputPos.current.y;
-            const sens = controlsRef.current.sensitivity;
-            inputTarget.current.x += dx * sens;
-            inputTarget.current.y += dy * sens;
+            const impulse = controlsRef.current.impulseStrength;
+            aimVelocity.current.x += dx * impulse;
+            aimVelocity.current.y += dy * impulse;
         }
 
         lastInputPos.current = { x, y };
@@ -663,6 +688,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
     const handleEnd = () => {
         if (!isMyTurn || !isAiming.current) return;
         isAiming.current = false;
+        aimVelocity.current = { x: 0, y: 0 };
         playRelease();
         socket?.emit('shoot', { aimPosition: reticlePos.current });
     };
