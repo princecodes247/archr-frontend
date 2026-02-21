@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { useControls, folder } from 'leva';
+import { useControls, folder, Leva } from 'leva';
 import { useSocketStore } from '../stores/useSocketStore';
 import type { Room, Point } from '../types';
 import { playAim, playRelease, playFlight, playImpact, playScorePop, playMatchEnd } from '../sounds/SoundManager';
@@ -67,7 +67,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             maxArrows: { value: 3, min: 1, max: 10, step: 1, label: 'Max Retained Arrows' },
             useComplexShadow: { value: true, label: 'Complex Shadow' },
         })
-    }, { hidden: !import.meta.env.DEV });
+    });
     // Store controls in a ref so the render loop always reads the latest
     // without needing controls in any useEffect dependency array.
     const controlsRef = useRef(controls);
@@ -668,19 +668,22 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
     };
 
     return (
-        <canvas
-            ref={canvasRef}
-            className={`block w-full h-full touch-none ${isMyTurn ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
-            onMouseDown={(e) => handleStart(e.clientX, e.clientY)}
-            onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
-            onMouseUp={handleEnd}
-            onMouseLeave={() => { if (isAiming.current) handleEnd(); }}
-            onTouchStart={(e) => {
-                handleStart(e.touches[0].clientX, e.touches[0].clientY);
-            }}
-            onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
-            onTouchEnd={handleEnd}
-        />
+        <>
+            <canvas
+                ref={canvasRef}
+                className={`block w-full h-full touch-none ${isMyTurn ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
+                onMouseDown={(e) => handleStart(e.clientX, e.clientY)}
+                onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
+                onMouseUp={handleEnd}
+                onMouseLeave={() => { if (isAiming.current) handleEnd(); }}
+                onTouchStart={(e) => {
+                    handleStart(e.touches[0].clientX, e.touches[0].clientY);
+                }}
+                onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
+                onTouchEnd={handleEnd}
+            />
+            <Leva hidden={import.meta.env.VITE_ENV !== 'dev'} />
+        </>
     );
 };
 
