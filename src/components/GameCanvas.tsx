@@ -67,7 +67,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ onExit: _onExit }) => {
             maxArrows: { value: 3, min: 1, max: 10, step: 1, label: 'Max Retained Arrows' },
             useComplexShadow: { value: true, label: 'Complex Shadow' },
         })
-    });
+    }, { hidden: !import.meta.env.DEV });
     // Store controls in a ref so the render loop always reads the latest
     // without needing controls in any useEffect dependency array.
     const controlsRef = useRef(controls);
