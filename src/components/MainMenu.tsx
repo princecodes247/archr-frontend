@@ -29,6 +29,14 @@ const MainMenu: React.FC<MainMenuProps> = ({ currentScore, onScoreSubmitted }) =
 
                     <div className="menu-buttons">
                         <Link to="/game/solo" className="menu-btn menu-btn-primary">
+                            <span>Play</span>
+                            <svg className="menu-btn-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                            </svg>
+                        </Link>
+                    </div>
+                    {/* <div className="menu-buttons">
+                        <Link to="/game/solo" className="menu-btn menu-btn-primary">
                             <span>Play Solo</span>
                             <svg className="menu-btn-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
@@ -39,7 +47,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ currentScore, onScoreSubmitted }) =
                             <span>Multiplayer</span>
                             <span className="menu-btn-badge">Online</span>
                         </Link>
-                    </div>
+                    </div> */}
 
                     <div className="menu-footer">
                         v1.0 · ARCHR
