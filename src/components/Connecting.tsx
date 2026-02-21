@@ -7,7 +7,7 @@ const Connecting: React.FC = () => {
             <div className="connecting-content">
                 <div className="connecting-logo">
                     <h1 className="connecting-title">ARCHR</h1>
-                    <div className="connecting-subtitle">Precision Archery</div>
+                    <div className="connecting-subtitle">Super Simple Archery</div>
                 </div>
 
                 <div className="target-loader">

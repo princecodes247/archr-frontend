@@ -23,7 +23,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ currentScore, onScoreSubmitted }) =
                 <div className="menu-hero">
                     <div className="menu-logo">
                         <h1 className="menu-logo-title">ARCHR</h1>
-                        <div className="menu-logo-subtitle">Precision Archery</div>
+                        <div className="menu-logo-subtitle">Super Simple Archery</div>
                         <div className="menu-logo-divider" />
                     </div>
 
